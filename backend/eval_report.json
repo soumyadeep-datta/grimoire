@@ -1,0 +1,11 @@
+{
+  "faithfulness": 0.9432106782106782,
+  "contextual_recall": 0.8840852130325815,
+  "answer_relevancy": 0.9338888888888889,
+  "contextual_precision": 0.9125,
+  "n_questions": 20,
+  "retrieval_k": 5,
+  "generation_model": "claude-sonnet-4-20250514",
+  "evaluation_model": "gpt-4o-mini",
+  "elapsed_seconds": 856.5
+}

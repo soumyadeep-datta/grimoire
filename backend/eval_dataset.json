@@ -1,0 +1,102 @@
+[
+  {
+    "question": "How do you add a background task in FastAPI and what does the endpoint return immediately?",
+    "ground_truth": "In FastAPI, you add a background task by injecting BackgroundTasks as a parameter and using background_tasks.add_task(function_name, *args). The endpoint returns immediately with a response (like {\"status\": \"processing\"}) while the background task executes separately. For example: background_tasks.add_task(send_email, \"user@example.com\") will execute send_email in the background after returning the response.",
+    "source": "python_async.txt"
+  },
+  {
+    "question": "How does FastAPI handle response filtering when using response models?",
+    "ground_truth": "FastAPI will filter the response to only include fields declared in the response model. For example, if you declare a response_model=ItemResponse with fields 'name' and 'price', FastAPI will automatically filter the response to only include those fields, even if the underlying function returns additional data.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "What happens when FastAPI fails to validate a path parameter type?",
+    "ground_truth": "FastAPI automatically validates the type and returns a 422 error if validation fails.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "What happens when required configuration keys are missing during application startup?",
+    "ground_truth": "The app refuses to start if required keys are missing, surfacing config errors immediately. All settings are validated at startup.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What is the difference between PersistentClient and EphemeralClient in terms of data storage?",
+    "ground_truth": "PersistentClient automatically saves data to disk and the data survives process restarts, while EphemeralClient stores data in memory only and the data is lost on restart.",
+    "source": "chromadb_reference.txt"
+  },
+  {
+    "question": "What are the three components that each tool must have in LangChain agents?",
+    "ground_truth": "Each tool has three components: 1) name - how the agent refers to it, 2) description - when and how to use it (the agent reads this), and 3) function - the actual implementation.",
+    "source": "langchain_agents.txt"
+  },
+  {
+    "question": "How does FastAPI handle sync endpoints differently from async endpoints in terms of execution?",
+    "ground_truth": "FastAPI handles sync and async endpoints differently in their execution model. Sync endpoints run in a thread pool automatically, while async endpoints run on the event loop. This means sync functions are executed in separate threads to avoid blocking the main event loop, whereas async functions are executed directly on the event loop using Python's async/await mechanism.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "What are the minimum and maximum allowed values for chunk_size in the RAG tuning configuration?",
+    "ground_truth": "The chunk_size parameter has a minimum value of 100 (ge=100) and a maximum value of 4000 (le=4000), with a default value of 1000.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "How do you add a background task to run after returning a response in FastAPI?",
+    "ground_truth": "You can add a background task by importing BackgroundTasks from fastapi, adding it as a parameter to your endpoint function, and then using the add_task() method to specify the function to run and its arguments. For example: `background_tasks.add_task(write_notification, email, message=\"some notification\")`. The task will execute after the response is returned to the client.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "What are the default CORS origins configured for the backend?",
+    "ground_truth": "The default CORS origins are [\"http://localhost:3000\", \"http://localhost:5173\"]",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "How can I prevent my agent from selecting the wrong tool for a given task?",
+    "ground_truth": "To prevent wrong tool selection, you should improve your tool descriptions by writing clear, specific docstrings that explain WHEN to use each tool. The agent reads each tool's docstring to decide which to call, so instead of vague descriptions like 'Search the database', use specific ones like 'Search the local knowledge base for technical documentation. Use this FIRST for any question that might be in the ingested docs.'",
+    "source": "langchain_agents.txt"
+  },
+  {
+    "question": "What validation is performed on the chunk_overlap field and why?",
+    "ground_truth": "The chunk_overlap field is validated to ensure it is less than the chunk_size. The validation retrieves the chunk_size value (defaulting to 1000 if not set) and raises a ValueError if chunk_overlap is greater than or equal to chunk_size. This is necessary because overlap cannot be equal to or exceed the size of the chunks being overlapped.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What is the difference between using hnsw:space=cosine and hnsw:space=l2 when creating a ChromaDB collection?",
+    "ground_truth": "hnsw:space=cosine is used for semantic similarity with normalised embeddings, while hnsw:space=l2 (which is the default) is used for Euclidean distance.",
+    "source": "chromadb_reference.txt"
+  },
+  {
+    "question": "How do you run multiple API requests simultaneously in Python async code instead of running them one after another?",
+    "ground_truth": "Use asyncio.gather() to run multiple coroutines concurrently. For example: `results = await asyncio.gather(fetch_data(\"url1\"), fetch_data(\"url2\"), fetch_data(\"url3\"))`. This runs all three requests simultaneously, not sequentially.",
+    "source": "python_async.txt"
+  },
+  {
+    "question": "What is the key difference between agents and chains in LangChain?",
+    "ground_truth": "Unlike chains which are fixed sequences, agents use an LLM to reason dynamically about what to do next and decide which actions to take and in what order.",
+    "source": "langchain_agents.txt"
+  },
+  {
+    "question": "What conditions must be met for tracing to be enabled in the Settings class?",
+    "ground_truth": "For tracing to be enabled, both `langchain_tracing_v2` must be true and `langchain_api_key` must be present (non-empty/truthy). The `is_tracing_enabled` property returns true only when both conditions are satisfied.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What are the minimum and maximum allowed values for the claude_max_tokens setting?",
+    "ground_truth": "The claude_max_tokens setting has a minimum value of 256 (ge=256) and a maximum value of 8192 (le=8192).",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What are the two distance metrics available for ChromaDB collections and when should each be used?",
+    "ground_truth": "ChromaDB supports two distance metrics: 'cosine' and 'l2'. Use hnsw:space=cosine for semantic similarity with normalised embeddings, and use hnsw:space=l2 (which is the default) for Euclidean distance.",
+    "source": "chromadb_reference.txt"
+  },
+  {
+    "question": "What should you call before patching environment variables in tests when using the get_settings function?",
+    "ground_truth": "You should call get_settings.cache_clear() before patching environment variables in tests.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What is the difference between PersistentClient and EphemeralClient in terms of data storage?",
+    "ground_truth": "PersistentClient automatically saves to disk and data survives process restarts, while EphemeralClient stores data in memory only and data is lost on restart.",
+    "source": "chromadb_reference.txt"
+  }
+]

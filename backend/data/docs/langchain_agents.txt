@@ -1,0 +1,71 @@
+LangChain Agents Reference
+
+WHAT IS AN AGENT
+An agent uses an LLM to decide which actions to take and in what order.
+Unlike chains (fixed sequences), agents reason dynamically about what to do next.
+
+REACT PATTERN
+ReAct (Reasoning + Acting) is the standard agent pattern.
+The agent alternates between:
+  Thought: what do I need to know?
+  Action: which tool should I call?
+  Action Input: what do I pass to the tool?
+  Observation: what did the tool return?
+  ... (repeats until enough information)
+  Final Answer: the response to the user
+
+CREATING A REACT AGENT
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain_core.prompts import PromptTemplate
+
+agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
+executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    max_iterations=10,
+    handle_parsing_errors=True,
+    return_intermediate_steps=True,
+)
+
+TOOLS
+Tools are functions the agent can call. Each tool has:
+- name: how the agent refers to it
+- description: when and how to use it (the agent reads this)
+- function: the actual implementation
+
+from langchain_core.tools import tool
+
+@tool
+def search(query: str) -> str:
+    """Search for information. Use when you need current facts."""
+    return search_api(query)
+
+AGENT EXECUTOR SETTINGS
+max_iterations: stops the agent after N tool calls (prevents infinite loops)
+max_execution_time: stops after N seconds
+handle_parsing_errors: recovers from malformed LLM output instead of crashing
+return_intermediate_steps: exposes every tool call for debugging and UI display
+verbose: prints Thought/Action/Observation to stdout during development
+
+MEMORY
+Agents can maintain conversation history across turns:
+from langchain.memory import ConversationBufferWindowMemory
+memory = ConversationBufferWindowMemory(k=10)
+
+TOOL SELECTION
+The agent reads each tool's docstring to decide which to call.
+Write clear, specific docstrings that explain WHEN to use the tool.
+Bad:  "Search the database"
+Good: "Search the local knowledge base for technical documentation.
+       Use this FIRST for any question that might be in the ingested docs."
+
+LANGSMITH TRACING
+Set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY to enable.
+Every agent decision is logged with timing and token usage.
+Access traces at smith.langchain.com.
+
+COMMON ISSUES
+- Agent loops: reduce max_iterations, improve Final Answer instructions in prompt
+- Wrong tool selected: improve tool descriptions
+- Malformed output: set handle_parsing_errors=True
+- Slow responses: use direct RAG for simple questions, agent only when needed

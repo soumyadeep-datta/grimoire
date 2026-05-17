@@ -1,0 +1,60 @@
+ChromaDB Quick Reference
+
+INSTALLATION
+pip install chromadb
+
+BASIC USAGE
+import chromadb
+client = chromadb.PersistentClient(path="./chroma_data")
+
+CREATING A COLLECTION
+collection = client.create_collection(
+    name="my_collection",
+    metadata={"hnsw:space": "cosine"}
+)
+Use hnsw:space=cosine for semantic similarity with normalised embeddings.
+Use hnsw:space=l2 (default) for Euclidean distance.
+
+ADDING DOCUMENTS
+collection.add(
+    documents=["This is document 1", "This is document 2"],
+    metadatas=[{"source": "doc1.txt"}, {"source": "doc2.txt"}],
+    ids=["id1", "id2"]
+)
+
+QUERYING
+results = collection.query(
+    query_texts=["This is a query"],
+    n_results=5,
+    include=["documents", "metadatas", "distances"]
+)
+
+FILTERING WITH METADATA
+results = collection.query(
+    query_texts=["query"],
+    where={"source": "doc1.txt"},
+    n_results=3
+)
+
+GETTING COLLECTION COUNT
+count = collection.count()
+
+DELETING A COLLECTION
+client.delete_collection("my_collection")
+
+PERSISTENCE
+PersistentClient automatically saves to disk. Data survives process restarts.
+EphemeralClient stores data in memory only — lost on restart.
+
+DISTANCE METRICS
+cosine: measures angle between vectors, good for semantic similarity
+l2: Euclidean distance, sensitive to vector magnitude
+ip: inner product, use only with normalised vectors
+
+BEST PRACTICES
+- Always normalise embeddings when using cosine distance
+- Use meaningful IDs for documents to enable deduplication
+- Store source metadata on every document for citations
+- Use metadata filtering to scope searches to specific document sets
+- Batch document additions for better performance (add many at once)
+- Use persistent client for production, ephemeral for testing

@@ -1,0 +1,72 @@
+Python Async/Await Patterns for APIs
+
+FUNDAMENTALS
+async def declares a coroutine function
+await suspends execution until the awaited coroutine completes
+asyncio.run() is the entry point for running async code
+
+BASIC EXAMPLE
+import asyncio
+
+async def fetch_data(url: str) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.json()
+
+async def main():
+    data = await fetch_data("https://api.example.com/data")
+    print(data)
+
+asyncio.run(main())
+
+RUNNING TASKS CONCURRENTLY
+Use asyncio.gather() to run multiple coroutines concurrently:
+
+async def main():
+    results = await asyncio.gather(
+        fetch_data("https://api1.example.com"),
+        fetch_data("https://api2.example.com"),
+        fetch_data("https://api3.example.com"),
+    )
+    return results
+
+This runs all three requests simultaneously, not sequentially.
+
+RUNNING SYNC CODE IN ASYNC CONTEXT
+CPU-bound or blocking sync code blocks the event loop.
+Use run_in_executor to offload to a thread pool:
+
+import asyncio
+loop = asyncio.get_event_loop()
+result = await loop.run_in_executor(None, blocking_function, arg1, arg2)
+
+This is how Grimoire calls ChromaDB and the embedding model without
+blocking the FastAPI event loop.
+
+FASTAPI AND ASYNC
+FastAPI supports both sync and async route handlers:
+- async def: runs on the event loop, good for I/O bound work
+- def: automatically runs in a thread pool, good for CPU bound work
+
+For database calls, use async drivers (asyncpg, motor, etc.)
+For CPU work (ML inference, embeddings), use run_in_executor.
+
+COMMON MISTAKES
+Do not use time.sleep() in async code — use await asyncio.sleep()
+Do not use requests library in async code — use aiohttp or httpx
+Do not block the event loop with CPU-intensive work without run_in_executor
+
+ASYNCIO TIMEOUT
+from asyncio import timeout
+
+async def main():
+    async with timeout(10):  # raises TimeoutError after 10 seconds
+        await slow_operation()
+
+BACKGROUND TASKS IN FASTAPI
+from fastapi import BackgroundTasks
+
+@app.post("/items/")
+async def create_item(background_tasks: BackgroundTasks):
+    background_tasks.add_task(send_email, "user@example.com")
+    return {"status": "processing"}

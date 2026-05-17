@@ -40,9 +40,6 @@ class Settings(BaseSettings):
     # ── Web Search ─────────────────────────────────────────────────────────────
     tavily_api_key: str = Field(..., description="Required")
 
-    # ── Evaluation (OpenAI for RAGAS scoring) ──────────────────────────────────
-    openai_api_key: str | None = Field(default=None)
-
     # ── Observability ──────────────────────────────────────────────────────────
     langchain_api_key: str | None = Field(default=None)
     langchain_tracing_v2: bool = Field(default=False)
