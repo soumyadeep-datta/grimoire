@@ -55,7 +55,7 @@ def run_evaluation(
     k = k or settings.retrieval_top_k
 
     # DeepEval reads OPENAI_API_KEY from environment
-    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key or ""
 
     dataset_path = Path(dataset_path)
     if not dataset_path.exists():
