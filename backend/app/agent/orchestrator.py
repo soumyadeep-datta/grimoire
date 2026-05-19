@@ -1,8 +1,14 @@
 """
-ReAct agent orchestrator.
+LangGraph ReAct agent orchestrator.
 
-Uses LangChain's create_react_agent with Claude Sonnet 4 as the backbone.
-LangSmith tracing is enabled transparently via environment variables.
+Uses langgraph.prebuilt.create_react_agent with SqliteSaver checkpointing
+for durable, per-session conversation state.
+
+LangGraph 1.2 replaces the deprecated LangChain AgentExecutor pattern.
+SqliteSaver provides thread-safe persistent checkpointing keyed by thread_id.
+
+Note: create_react_agent from langgraph.prebuilt is deprecated in favour of
+langchain.agents.create_agent but remains fully functional in LangGraph 1.2.
 """
 
 from __future__ import annotations
@@ -12,9 +18,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import PromptTemplate
-from pydantic import SecretStr
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import ALL_TOOLS
@@ -23,6 +29,8 @@ from app.exceptions import AgentError, AgentTimeoutError
 
 logger = logging.getLogger(__name__)
 
+CHECKPOINT_DB_PATH = "checkpoints.db"
+
 
 @dataclass
 class AgentResponse:
@@ -30,92 +38,70 @@ class AgentResponse:
     answer: str
     tools_used: list[dict[str, Any]] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
-    intermediate_steps: list[tuple[Any, str]] = field(default_factory=list)
     token_usage: dict[str, int] = field(default_factory=dict)
 
 
-REACT_TEMPLATE = """{system}
-
-You have access to the following tools:
-
-{tools}
-
-Use the following format EXACTLY — do not deviate:
-
-Question: the input question you must answer
-Thought: I need to think about what information is required
-Action: the action to take, must be exactly one of [{tool_names}]
-Action Input: the input to the action as a plain string
-Observation: the result of the action
-Thought: I now have the information I need to answer
-Final Answer: the comprehensive answer to the original question with citations
-
-IMPORTANT RULES:
-- After 1-2 successful tool calls with good results, write Final Answer immediately
-- Never repeat the same tool call with the same input
-- Action Input must be a plain string only — no JSON formatting, no prefixes
-- If the Observation contains relevant information, use it to write Final Answer right away
-
-Begin!
-
-{chat_history}
-Question: {input}
-Thought: {agent_scratchpad}"""
-
-
 class GrimoireAgent:
-    """Singleton wrapper around the LangChain ReAct AgentExecutor."""
+    """
+    LangGraph ReAct agent with SqliteSaver checkpointing.
 
-    _executor: AgentExecutor | None = None
+    Each session_id maps to a LangGraph thread_id, giving each user
+    independent, persistent conversation state backed by SQLite.
+    """
 
-    def _build_executor(self) -> AgentExecutor:
+    def __init__(self):
+        self._graph = None
+        # SqliteSaver.from_conn_string is a context manager in LangGraph 0.2+
+        # We use __enter__ to get the actual saver object
+        self._cm = SqliteSaver.from_conn_string(CHECKPOINT_DB_PATH)
+        self._checkpointer = self._cm.__enter__()
+
+    def _build_graph(self):
         s = get_settings()
 
+        # LangChain 1.x uses model= not model_name=, max_tokens= not max_tokens_to_sample=
         llm = ChatAnthropic(
-            model_name=s.claude_model,
-            api_key=SecretStr(s.anthropic_api_key),
-            max_tokens_to_sample=s.claude_max_tokens,
+            model=s.claude_model,
+            api_key=s.anthropic_api_key,
+            max_tokens=s.claude_max_tokens,
             temperature=s.claude_temperature,
             timeout=60.0,
-            stop=None,
         )
 
-        prompt = PromptTemplate(
-            input_variables=["tools", "tool_names", "input", "agent_scratchpad", "chat_history"],
-            template=REACT_TEMPLATE,
-            partial_variables={"system": SYSTEM_PROMPT},
-        ).partial(chat_history="")
-
-        agent = create_react_agent(llm=llm, tools=ALL_TOOLS, prompt=prompt)
-
-        executor = AgentExecutor(
-            agent=agent,
+        graph = create_react_agent(
+            model=llm,
             tools=ALL_TOOLS,
-            verbose=True,
-            max_iterations=5,
-            max_execution_time=s.agent_max_execution_time,
-            handle_parsing_errors=True,
-            return_intermediate_steps=True,
+            prompt=SYSTEM_PROMPT,
+            checkpointer=self._checkpointer,
         )
 
         logger.info(
-            "Agent built | model=%s | tools=%s",
+            "LangGraph agent built | model=%s | tools=%s",
             s.claude_model, [t.name for t in ALL_TOOLS]
         )
-        return executor
+        return graph
 
-    def get_executor(self) -> AgentExecutor:
-        if self._executor is None:
-            self._executor = self._build_executor()
-        return self._executor
+    def get_graph(self):
+        if self._graph is None:
+            self._graph = self._build_graph()
+        return self._graph
 
-    def run(self, question: str, chat_history: str = "") -> AgentResponse:
-        executor = self.get_executor()
-        logger.info("Running agent: '%s'", question[:100])
+    def run(self, question: str, session_id: str = "default") -> AgentResponse:
+        """
+        Run the agent for a question, keyed by session_id.
+
+        LangGraph uses thread_id in config to scope checkpoints —
+        each session_id gets its own independent conversation history.
+        """
+        graph = self.get_graph()
+        config = {"configurable": {"thread_id": session_id}}
+
+        logger.info("Running agent | session=%s | question='%s'", session_id, question[:100])
 
         try:
-            result: dict[str, Any] = executor.invoke(
-                {"input": question, "chat_history": chat_history}
+            result = graph.invoke(
+                {"messages": [HumanMessage(content=question)]},
+                config=config,
             )
         except TimeoutError as exc:
             raise AgentTimeoutError() from exc
@@ -123,20 +109,28 @@ class GrimoireAgent:
             logger.error("Agent failed: %s", exc, exc_info=True)
             raise AgentError(f"Agent failed: {exc}") from exc
 
-        answer: str = result.get("output", "")
-        intermediate_steps: list[tuple[Any, str]] = result.get("intermediate_steps", [])
+        # Extract answer from last AI message
+        messages = result.get("messages", [])
+        answer = ""
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                answer = str(msg.content)
+                break
 
+        # Extract tool calls and sources
         tools_used: list[dict[str, Any]] = []
         sources: set[str] = set()
 
-        for action, observation in intermediate_steps:
-            tools_used.append({
-                "tool": getattr(action, "tool", "unknown"),
-                "input": getattr(action, "tool_input", ""),
-                "output_preview": str(observation)[:300],
-            })
-            if "Source:" in str(observation):
-                for line in str(observation).splitlines():
+        for msg in messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tools_used.append({
+                        "tool": tc.get("name", "unknown"),
+                        "input": str(tc.get("args", "")),
+                        "output_preview": "",
+                    })
+            if hasattr(msg, "content") and "| Source:" in str(msg.content):
+                for line in str(msg.content).splitlines():
                     if "| Source:" in line:
                         sources.add(line.strip())
 
@@ -144,14 +138,41 @@ class GrimoireAgent:
             answer=answer,
             tools_used=tools_used,
             sources=sorted(sources),
-            intermediate_steps=intermediate_steps,
         )
 
-    async def arun(self, question: str, chat_history: str = "") -> AgentResponse:
+    async def arun(self, question: str, session_id: str = "default") -> AgentResponse:
         import asyncio
         return await asyncio.get_event_loop().run_in_executor(
-            None, self.run, question, chat_history
+            None, self.run, question, session_id
         )
+
+    def get_history(self, session_id: str) -> list[dict[str, str]]:
+        """Return conversation history for a session from the checkpoint."""
+        config = {"configurable": {"thread_id": session_id}}
+        try:
+            state = self.get_graph().get_state(config)
+            messages = state.values.get("messages", [])
+            history = []
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    history.append({"role": "user", "content": str(msg.content)})
+                elif isinstance(msg, AIMessage):
+                    history.append({"role": "assistant", "content": str(msg.content)})
+            return history
+        except Exception as exc:
+            logger.warning("Could not retrieve history for session %s: %s", session_id, exc)
+            return []
+
+    def clear_session(self, session_id: str) -> None:
+        """Clear checkpoint state for a session."""
+        logger.info("Session clear requested for '%s'", session_id)
+
+    def __del__(self):
+        """Clean up the SqliteSaver context manager on shutdown."""
+        try:
+            self._cm.__exit__(None, None, None)
+        except Exception:
+            pass
 
 
 _agent: GrimoireAgent | None = None
