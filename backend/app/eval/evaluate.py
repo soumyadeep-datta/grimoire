@@ -57,6 +57,7 @@ def run_evaluation(
     # DeepEval reads OPENAI_API_KEY from environment
     os.environ["OPENAI_API_KEY"] = settings.openai_api_key or ""
 
+
     dataset_path = Path(dataset_path)
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
@@ -70,12 +71,11 @@ def run_evaluation(
 
     # Claude for answer generation
     gen_llm = ChatAnthropic(
-        model_name=settings.claude_model,
+        model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
-        max_tokens_to_sample=4096,
+        max_tokens=4096,
         temperature=0.0,
         timeout=60.0,
-        stop=None,
     )
 
     # DeepEval metrics — async_mode=False = synchronous, no concurrent jobs

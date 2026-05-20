@@ -14,6 +14,11 @@ Memory architecture:
     store as the single source of truth for conversation history. session_id
     is a unified key across both query paths — history persists across server
     restarts and is consistent regardless of which mode was used.
+
+Startup:
+    The lifespan block eagerly initialises both the Voyage embedding client
+    and the Qdrant VectorStore (which builds the BM25S in-memory index).
+    This eliminates the cold-start penalty on the first user request.
 """
 
 from __future__ import annotations
@@ -61,15 +66,29 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Eager initialisation of heavy resources at startup.
+
+    Shifts the cold-start penalty from the first user request to server boot,
+    ensuring consistent low-latency responses from the first query onwards.
+    """
     settings = get_settings()
     logger.info("Grimoire starting up | env=%s", settings.environment)
 
+    # 1. Warm up Voyage AI embedding client
     try:
         from app.rag.embeddings import get_embedding_client
         get_embedding_client()
         logger.info("Embedding client initialized and warmed up.")
     except Exception as exc:
         logger.error("Embedding client warm-up failed: %s", exc)
+
+    # 2. Eager init of VectorStore — builds BM25S in-memory index at startup
+    try:
+        get_vector_store()
+        logger.info("Vector store initialized and BM25S index built.")
+    except Exception as exc:
+        logger.error("Vector store warm-up failed: %s", exc)
 
     yield
 

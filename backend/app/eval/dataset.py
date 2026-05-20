@@ -2,23 +2,25 @@
 Evaluation dataset generator.
 
 Generates question-answer pairs from ingested document chunks using Claude,
-then serialises them to JSON for reproducible RAGAS evaluation runs.
+then serialises them to JSON for reproducible DeepEval evaluation runs.
 
 Usage:
-    python -m app.eval.dataset --output eval_dataset.json --n-questions 30
+    python -m app.eval.dataset --output eval_dataset.json --n-questions 20
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import random
+import time
 from pathlib import Path
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
-from pydantic import SecretStr
 from langchain_core.messages import HumanMessage
+from pydantic import SecretStr
 
 from app.agent.prompts import EVAL_GENERATION_PROMPT
 from app.config import get_settings
@@ -28,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 
 def generate_eval_dataset(
-    n_questions: int = 30,
+    n_questions: int = 20,
     output_path: str | Path = "eval_dataset.json",
     seed: int = 42,
 ) -> list[dict[str, str]]:
     """
-    Sample chunks from ChromaDB and ask Claude to generate QA pairs.
+    Sample chunks from Qdrant and ask Claude to generate QA pairs.
 
     Args:
         n_questions: Total number of question-answer pairs to generate.
@@ -55,46 +57,61 @@ def generate_eval_dataset(
             "No documents ingested. Run POST /ingest before generating the eval dataset."
         )
 
-    logger.info(
-        "Generating %d QA pairs from %d available chunks.", n_questions, total_chunks
-    )
+    logger.info("Generating %d QA pairs from %d available chunks.", n_questions, total_chunks)
 
     llm = ChatAnthropic(
-        model_name=settings.claude_model,
+        model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
-        max_tokens_to_sample=2048,
+        max_tokens=2048,
         temperature=0.3,
         timeout=60.0,
-        stop=None,
     )
 
-    # Sample random chunks from the collection
-    sample = store._chroma._collection.get(limit=total_chunks, include=["documents", "metadatas"])
-    all_texts: list[str] = sample.get("documents") or []
-    all_metas: list[dict] = sample.get("metadatas") or []
+    all_points, _ = store._client.scroll(
+        collection_name=store._collection,
+        limit=10000,
+        with_payload=True,
+        with_vectors=False,
+    )
 
-    if not all_texts:
-        raise RuntimeError("ChromaDB returned no text content.")
+    all_chunks = [
+        {
+            "text": (p.payload or {}).get("content", ""),
+            "source": (p.payload or {}).get("source", "unknown"),
+        }
+        for p in all_points
+        if (p.payload or {}).get("content", "").strip()
+    ]
 
-    # Sample up to n_questions chunks (one QA pair per chunk, deduplicated)
-    indices = random.sample(range(len(all_texts)), min(n_questions, len(all_texts)))
-    sampled = [(all_texts[i], all_metas[i]) for i in indices]
+    if not all_chunks:
+        raise RuntimeError("Qdrant returned no text content.")
+
+    indices = random.sample(range(len(all_chunks)), min(n_questions, len(all_chunks)))
+    sampled = [all_chunks[i] for i in indices]
 
     all_qa_pairs: list[dict[str, str]] = []
+    
+    # Calculate how many questions to ask per chunk to hit the target
+    questions_per_chunk = math.ceil(n_questions / len(sampled))
 
-    for chunk_text, meta in sampled:
-        source = meta.get("source", "unknown")
+    for i, chunk in enumerate(sampled):
+        chunk_text = chunk["text"]
+        source = chunk["source"]
+
+        # Pace requests to avoid Anthropic rate limits
+        if i > 0:
+            time.sleep(5)
+
         prompt = EVAL_GENERATION_PROMPT.format(
             context=chunk_text,
-            n_questions=1,
+            n_questions=questions_per_chunk,
             source=source,
         )
 
         try:
             response = llm.invoke([HumanMessage(content=prompt)])
-            raw = response.content.strip()
+            raw = str(response.content).strip()
 
-            # Strip markdown code fences if present
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -105,7 +122,7 @@ def generate_eval_dataset(
             all_qa_pairs.extend(qa_pairs)
 
         except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Failed to parse QA pair from chunk (source=%s): %s", source, exc)
+            logger.warning("Failed to parse QA pair (source=%s): %s", source, exc)
             continue
 
         if len(all_qa_pairs) >= n_questions:
@@ -124,9 +141,9 @@ def generate_eval_dataset(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate RAGAS evaluation dataset")
+    parser = argparse.ArgumentParser(description="Generate DeepEval evaluation dataset")
     parser.add_argument("--output", default="eval_dataset.json")
-    parser.add_argument("--n-questions", type=int, default=30)
+    parser.add_argument("--n-questions", type=int, default=20)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)

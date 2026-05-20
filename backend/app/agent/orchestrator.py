@@ -11,11 +11,18 @@ Memory architecture:
     Both agent mode and direct RAG mode write to the same LangGraph SQLite
     checkpoint store, keyed by session_id. This gives a single source of truth
     for conversation history regardless of which query path was used.
+
+SQLite connection:
+    Using explicit sqlite3.connect(check_same_thread=False) + SqliteSaver(conn)
+    instead of the context manager pattern. This is safer in FastAPI with
+    hot-reloading — the context manager pattern can have its connections
+    severed during Uvicorn lifecycle events, causing lock errors.
 """
 
 from __future__ import annotations
 
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,12 +63,14 @@ class GrimoireAgent:
 
     def __init__(self):
         self._graph = None
-        self._cm = SqliteSaver.from_conn_string(CHECKPOINT_DB_PATH)
-        self._checkpointer = self._cm.__enter__()
+        # Explicit connection — safer than context manager in FastAPI/uvicorn
+        self._conn = sqlite3.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
+        self._checkpointer = SqliteSaver(self._conn)
 
     def _build_graph(self):
         s = get_settings()
 
+        # LangChain 1.x: model= not model_name=, max_tokens= not max_tokens_to_sample=
         llm = ChatAnthropic(
             model=s.claude_model,
             api_key=s.anthropic_api_key,
@@ -150,14 +159,11 @@ class GrimoireAgent:
         """
         Write a direct RAG exchange into the LangGraph checkpoint store.
 
-        This keeps the checkpoint store as the single source of truth for
-        conversation history regardless of which query path (agent vs direct RAG)
-        was used. Direct RAG calls this after generating an answer so that
-        subsequent agent-mode queries can see prior direct RAG turns.
+        Keeps the checkpoint store as the single source of truth regardless
+        of which query path (agent vs direct RAG) was used.
         """
         config = {"configurable": {"thread_id": session_id}}
         try:
-            # Get current state and append the new messages
             graph = self.get_graph()
             graph.update_state(
                 config,
@@ -168,14 +174,10 @@ class GrimoireAgent:
             )
             logger.debug("Wrote direct RAG exchange to checkpoint | session=%s", session_id)
         except Exception as exc:
-            # Non-fatal — history is nice to have, not required for the response
             logger.warning("Could not write to checkpoint for session %s: %s", session_id, exc)
 
     def get_history(self, session_id: str) -> list[dict[str, str]]:
-        """
-        Return full conversation history for a session from the checkpoint.
-        Works for both agent mode and direct RAG mode turns.
-        """
+        """Return full conversation history for a session from the checkpoint."""
         config = {"configurable": {"thread_id": session_id}}
         try:
             state = self.get_graph().get_state(config)
@@ -192,10 +194,7 @@ class GrimoireAgent:
             return []
 
     def get_history_string(self, session_id: str) -> str:
-        """
-        Return conversation history as a formatted string for prompt injection.
-        Used by direct RAG mode to provide context for follow-up questions.
-        """
+        """Return conversation history as a formatted string for prompt injection."""
         history = self.get_history(session_id)
         if not history:
             return ""
@@ -206,24 +205,12 @@ class GrimoireAgent:
         return "\n".join(lines)
 
     def clear_session(self, session_id: str) -> None:
-        """
-        Clear checkpoint state for a session using SqliteSaver.delete_thread.
-
-        SqliteSaver exposes delete_thread(thread_id) which removes all
-        checkpoints and writes for that thread from the SQLite database.
-        """
+        """Clear checkpoint state for a session using SqliteSaver.delete_thread."""
         try:
             self._checkpointer.delete_thread(session_id)
             logger.info("Cleared session '%s'", session_id)
         except Exception as exc:
             logger.warning("Could not clear session '%s': %s", session_id, exc)
-
-    def __del__(self):
-        """Clean up the SqliteSaver context manager on shutdown."""
-        try:
-            self._cm.__exit__(None, None, None)
-        except Exception:
-            pass
 
 
 _agent: GrimoireAgent | None = None

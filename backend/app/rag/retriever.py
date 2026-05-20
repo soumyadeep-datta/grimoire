@@ -3,7 +3,7 @@ Qdrant vector store with hybrid retrieval pipeline.
 
 Architecture:
     1. Dense search  — Qdrant + Voyage-code-3.5 embeddings (semantic)
-    2. Sparse search — BM25S (lexical, exact token matching)
+    2. Sparse search — BM25S lexical search (exact token matching)
     3. RRF fusion    — Reciprocal Rank Fusion (k=60) merges both ranked lists
     4. Reranking     — Cohere Rerank v4 cross-encoder (precision boost)
 
@@ -12,6 +12,9 @@ This pipeline eliminates the failure modes of pure dense search:
 - Semantic similarity → Voyage-code-3.5 catches these
 - Combined via RRF → neither approach's misses survive to the final result
 - Cohere Rerank → cross-encoder precision over the fused candidate set
+
+BM25S index is built once at startup and refreshed on document changes.
+This avoids the per-query rebuild bottleneck (O(N) → O(1) per search).
 
 Sources:
     https://python-client.qdrant.tech/quickstart
@@ -25,7 +28,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import bm25s
 import cohere
@@ -96,9 +99,8 @@ class VectorStore:
             → RRF fusion
             → Cohere Rerank v4 (top k)
 
-    BM25S index is rebuilt in-memory on each query from the full Qdrant payload.
-    For small-to-medium corpora (<100K chunks) this is fast enough; for larger
-    corpora, persist the BM25S index to disk between queries.
+    BM25S index is built once at __init__ and refreshed after document changes.
+    This eliminates the per-query O(N) rebuild bottleneck.
     """
 
     def __init__(self) -> None:
@@ -107,6 +109,12 @@ class VectorStore:
         self._cohere = cohere.ClientV2(api_key=settings.cohere_api_key)
         self._collection = COLLECTION_NAME
         self._ensure_collection()
+
+        # In-memory BM25S cache — built once at startup, refreshed on doc changes
+        self._all_chunks: list[dict] = []
+        self._bm25_retriever: bm25s.BM25 | None = None
+        self._refresh_bm25_index()
+
         logger.info(
             "Qdrant VectorStore initialised | path=%s | collection=%s | dim=%d",
             settings.qdrant_path, COLLECTION_NAME, EMBEDDING_DIM,
@@ -123,7 +131,29 @@ class VectorStore:
             )
             logger.info("Created Qdrant collection '%s'", self._collection)
 
+    def _refresh_bm25_index(self) -> None:
+        """
+        Fetch all chunks from Qdrant and build the BM25S index in memory.
+
+        Called once at init and after any document changes (add/delete).
+        O(N) on corpus size but amortised to O(1) per query.
+        """
+        count = self._client.count(collection_name=self._collection).count
+        if count == 0:
+            self._all_chunks = []
+            self._bm25_retriever = None
+            return
+
+        logger.info("Refreshing BM25S in-memory index | %d chunks...", count)
+        self._all_chunks = self._fetch_all_chunks()
+        corpus = [chunk["content"].lower().split() for chunk in self._all_chunks]
+        retriever = bm25s.BM25()
+        retriever.index(corpus)
+        self._bm25_retriever = retriever
+        logger.info("BM25S index built | %d chunks indexed", len(self._all_chunks))
+
     def add_documents(self, documents: List[Document]) -> int:
+        """Embed and upsert documents into Qdrant, then refresh BM25S index."""
         if not documents:
             return 0
 
@@ -146,6 +176,7 @@ class VectorStore:
 
         self._client.upsert(collection_name=self._collection, points=points)
         logger.info("Upserted %d chunks into Qdrant", len(points))
+        self._refresh_bm25_index()
         return len(points)
 
     def _fetch_all_chunks(self) -> list[dict]:
@@ -180,55 +211,44 @@ class VectorStore:
         ).points
         return [str(r.id) for r in results]
 
-    def _bm25_search(
-        self, query: str, all_chunks: list[dict], n: int
-    ) -> list[int]:
+    def _bm25_search(self, query: str, n: int) -> list[int]:
         """
-        Sparse BM25S lexical search — exact token matching.
-        Critical for code: function names, error codes, API identifiers.
-        Returns indices into all_chunks.
+        Sparse BM25S lexical search using the cached in-memory index.
+        O(1) index lookup — no per-query rebuild.
+        Returns indices into self._all_chunks.
         """
-        corpus = [chunk["content"].lower().split() for chunk in all_chunks]
-        retriever = bm25s.BM25()
-        retriever.index(corpus)
-
+        if self._bm25_retriever is None or not self._all_chunks:
+            return []
         query_tokens = bm25s.tokenize(query.lower(), show_progress=False)
-        results, _ = retriever.retrieve(query_tokens, k=min(n, len(all_chunks)))
-        # results shape: (1, k) — indices into corpus
+        results, _ = self._bm25_retriever.retrieve(
+            query_tokens, k=min(n, len(self._all_chunks))
+        )
         return list(results[0])
 
-    def similarity_search(
-        self, query: str, k: int = 5
-    ) -> List[RetrievalResult]:
+    def similarity_search(self, query: str, k: int = 5) -> List[RetrievalResult]:
         """
         Hybrid retrieval: BM25S + dense → RRF → Cohere Rerank v4.
-
         Raises CollectionNotFoundError if the collection is empty.
         """
-        count = self._client.count(collection_name=self._collection).count
-        if count == 0:
+        if not self._all_chunks:
             raise CollectionNotFoundError()
 
-        # Fetch all chunks for BM25S (in-memory index)
-        all_chunks = self._fetch_all_chunks()
-        n_candidates = min(k * CANDIDATE_MULTIPLIER, len(all_chunks))
+        n_candidates = min(k * CANDIDATE_MULTIPLIER, len(self._all_chunks))
 
-        # --- Stage 1: Dense search (Qdrant IDs as str) ---
+        # --- Stage 1: Dense search ---
         dense_ids = self._dense_search(query, n_candidates)
-
-        # Map Qdrant IDs → chunk indices
-        id_to_idx = {chunk["qdrant_id"]: i for i, chunk in enumerate(all_chunks)}
+        id_to_idx = {chunk["qdrant_id"]: i for i, chunk in enumerate(self._all_chunks)}
         dense_ranked = [id_to_idx[did] for did in dense_ids if did in id_to_idx]
 
-        # --- Stage 2: BM25S sparse search ---
-        bm25_ranked = self._bm25_search(query, all_chunks, n_candidates)
+        # --- Stage 2: BM25S sparse search (cached index) ---
+        bm25_ranked = self._bm25_search(query, n_candidates)
 
         # --- Stage 3: Reciprocal Rank Fusion ---
         fused = _reciprocal_rank_fusion([dense_ranked, bm25_ranked], k=RRF_K)
         candidate_indices = [idx for idx, _ in fused[:n_candidates]]
 
         # --- Stage 4: Cohere Rerank v4 ---
-        candidate_chunks = [all_chunks[i] for i in candidate_indices]
+        candidate_chunks = [self._all_chunks[i] for i in candidate_indices]
         candidate_texts = [c["content"] for c in candidate_chunks]
 
         try:
@@ -278,6 +298,7 @@ class VectorStore:
     def delete_collection(self) -> None:
         self._client.delete_collection(self._collection)
         self._ensure_collection()
+        self._refresh_bm25_index()
         logger.info("Collection '%s' wiped and recreated", self._collection)
 
 
