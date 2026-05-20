@@ -101,26 +101,35 @@ class TestVectorStore:
         assert results[0].source == "fastapi.md"
         assert len(results[0].content) > 0
 
-    def test_real_store_empty_collection_raises(self):
+    def test_real_store_empty_collection_raises(self, tmp_path):
         """Test the real VectorStore raises CollectionNotFoundError on empty collection."""
         from app.rag.retriever import VectorStore
-        store = VectorStore()
-        mock_count = MagicMock()
-        mock_count.count = 0
-        store._client.count = MagicMock(return_value=mock_count)
-        with pytest.raises(CollectionNotFoundError):
-            store.similarity_search("anything")
+        with patch("app.rag.retriever.get_settings") as mock_settings:
+            mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
+            mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            store = VectorStore()
+            mock_count = MagicMock()
+            mock_count.count = 0
+            store._client.count = MagicMock(return_value=mock_count)
+            with pytest.raises(CollectionNotFoundError):
+                store.similarity_search("anything")
 
-    def test_real_store_add_empty_returns_zero(self):
+    def test_real_store_add_empty_returns_zero(self, tmp_path):
         from app.rag.retriever import VectorStore
-        store = VectorStore()
-        result = store.add_documents([])
-        assert result == 0
+        with patch("app.rag.retriever.get_settings") as mock_settings:
+            mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
+            mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            store = VectorStore()
+            result = store.add_documents([])
+            assert result == 0
 
-    def test_collection_stats_on_error(self):
+    def test_collection_stats_on_error(self, tmp_path):
         from app.rag.retriever import VectorStore
-        store = VectorStore()
-        store._client.count = MagicMock(side_effect=Exception("db error"))
-        stats = store.collection_stats()
-        assert stats["total_chunks"] == 0
-        assert stats["unique_sources"] == []
+        with patch("app.rag.retriever.get_settings") as mock_settings:
+            mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
+            mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            store = VectorStore()
+            store._client.count = MagicMock(side_effect=Exception("db error"))
+            stats = store.collection_stats()
+            assert stats["total_chunks"] == 0
+            assert stats["unique_sources"] == []

@@ -206,8 +206,17 @@ class GrimoireAgent:
         return "\n".join(lines)
 
     def clear_session(self, session_id: str) -> None:
-        """Clear checkpoint state for a session."""
-        logger.info("Session clear requested for '%s'", session_id)
+        """
+        Clear checkpoint state for a session using SqliteSaver.delete_thread.
+
+        SqliteSaver exposes delete_thread(thread_id) which removes all
+        checkpoints and writes for that thread from the SQLite database.
+        """
+        try:
+            self._checkpointer.delete_thread(session_id)
+            logger.info("Cleared session '%s'", session_id)
+        except Exception as exc:
+            logger.warning("Could not clear session '%s': %s", session_id, exc)
 
     def __del__(self):
         """Clean up the SqliteSaver context manager on shutdown."""
