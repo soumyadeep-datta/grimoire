@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # ── Embeddings (Voyage AI) ─────────────────────────────────────────────────
     voyage_api_key: str = Field(..., description="Required for Voyage-code-3.5 embeddings")
     embedding_model: str = Field(default="voyage-code-3.5")
+    cohere_api_key: str = Field(..., description="Required for Cohere Rerank v4")
+
 
     # ── Evaluation (OpenAI for DeepEval scoring) ───────────────────────────────
     openai_api_key: str | None = Field(default=None)
