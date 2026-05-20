@@ -33,14 +33,18 @@ class Settings(BaseSettings):
 
     # ── LLM ────────────────────────────────────────────────────────────────────
     anthropic_api_key: str = Field(..., description="Required")
-    claude_model: str = Field(default="claude-sonnet-4-20250514")
+    claude_model: str = Field(default="claude-sonnet-4-6")
     claude_max_tokens: int = Field(default=4096, ge=256, le=8192)
     claude_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
 
     # ── Web Search ─────────────────────────────────────────────────────────────
     tavily_api_key: str = Field(..., description="Required")
 
-    # ── Evaluation (OpenAI for RAGAS scoring) ──────────────────────────────────
+    # ── Embeddings (Voyage AI) ─────────────────────────────────────────────────
+    voyage_api_key: str = Field(..., description="Required for Voyage-code-3.5 embeddings")
+    embedding_model: str = Field(default="voyage-code-3.5")
+
+    # ── Evaluation (OpenAI for DeepEval scoring) ───────────────────────────────
     openai_api_key: str | None = Field(default=None)
 
     # ── Observability ──────────────────────────────────────────────────────────
@@ -49,7 +53,7 @@ class Settings(BaseSettings):
     langchain_project: str = Field(default="grimoire")
 
     # ── Storage ────────────────────────────────────────────────────────────────
-    chroma_persist_dir: Path = Field(default=Path("./chroma_data"))
+    qdrant_path: Path = Field(default=Path("./qdrant_data"))
     sqlite_db_path: Path = Field(default=Path("./data/knowledge.db"))
 
     # ── CORS ───────────────────────────────────────────────────────────────────
@@ -61,14 +65,10 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=1000, ge=100, le=4000)
     chunk_overlap: int = Field(default=200, ge=0, le=1000)
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
-    embedding_model: str = Field(default="all-MiniLM-L6-v2")
 
     # ── Agent ──────────────────────────────────────────────────────────────────
     agent_max_iterations: int = Field(default=10, ge=1, le=25)
     agent_max_execution_time: float = Field(default=60.0, ge=5.0, le=300.0)
-
-    # ── Memory ─────────────────────────────────────────────────────────────────
-    memory_window_k: int = Field(default=10, ge=1, le=50)
 
     @field_validator("log_level")
     @classmethod
@@ -89,8 +89,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def ensure_dirs_exist(self) -> "Settings":
-        # Auto-create storage directories so ChromaDB never fails on first run
-        self.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
+        self.qdrant_path.mkdir(parents=True, exist_ok=True)
         self.sqlite_db_path.parent.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -126,5 +125,5 @@ def _configure_logging(level: str) -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("chromadb").setLevel(logging.WARNING)
+    logging.getLogger("qdrant_client").setLevel(logging.WARNING)
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)

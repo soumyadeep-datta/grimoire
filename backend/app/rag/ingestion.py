@@ -14,8 +14,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
-    UnstructuredHTMLLoader,
-    UnstructuredMarkdownLoader,
 )
 from langchain_core.documents import Document
 
@@ -27,11 +25,15 @@ logger = logging.getLogger(__name__)
 # Registry: adding a new format is one line
 _LOADER_REGISTRY: dict[str, type] = {
     ".pdf": PyPDFLoader,
-    ".md": UnstructuredMarkdownLoader,
-    ".markdown": UnstructuredMarkdownLoader,
+
+    # These should be raw text for RAG — NOT Unstructured
+    ".md": TextLoader,
+    ".markdown": TextLoader,
     ".txt": TextLoader,
-    ".html": UnstructuredHTMLLoader,
-    ".htm": UnstructuredHTMLLoader,
+    ".html": TextLoader,
+    ".htm": TextLoader,
+
+    # Code & config files
     ".py": TextLoader,  ".js": TextLoader,  ".ts": TextLoader,
     ".jsx": TextLoader, ".tsx": TextLoader, ".go": TextLoader,
     ".rs": TextLoader,  ".java": TextLoader, ".cpp": TextLoader,
@@ -41,7 +43,10 @@ _LOADER_REGISTRY: dict[str, type] = {
 
 # Code files split on language boundaries before whitespace
 _CODE_SEPARATORS = ["\nclass ", "\ndef ", "\n\n", "\n", " ", ""]
-_CODE_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".cpp", ".c"}
+_CODE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".go", ".rs", ".java", ".cpp", ".c"
+}
 
 
 def _build_splitter(ext: str) -> RecursiveCharacterTextSplitter:
@@ -50,21 +55,23 @@ def _build_splitter(ext: str) -> RecursiveCharacterTextSplitter:
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
         length_function=len,
-        add_start_index=True,  # stores char offset for precise citations
+        add_start_index=True,
     )
     if ext in _CODE_EXTENSIONS:
         kwargs["separators"] = _CODE_SEPARATORS
     return RecursiveCharacterTextSplitter(**kwargs)
 
 
-def load_document(file_path: str | Path) -> list[Document]:
+def _load_as_text(path: Path) -> list[Document]:
     """
-    Load a file from disk, split into chunks, and enrich metadata.
+    Use TextLoader but force UTF-8 and ignore weird encodings.
+    This prevents common ingestion crashes.
+    """
+    loader = TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
+    return loader.load()
 
-    Raises:
-        UnsupportedFileTypeError: extension not in registry
-        IngestionError: loader raised any exception
-    """
+
+def load_document(file_path: str | Path) -> list[Document]:
     path = Path(file_path).resolve()
     ext = path.suffix.lower()
 
@@ -76,7 +83,10 @@ def load_document(file_path: str | Path) -> list[Document]:
     logger.info("Loading %s with %s", path.name, _LOADER_REGISTRY[ext].__name__)
 
     try:
-        raw_docs = _LOADER_REGISTRY[ext](str(path)).load()
+        if _LOADER_REGISTRY[ext] is TextLoader:
+            raw_docs = _load_as_text(path)
+        else:
+            raw_docs = _LOADER_REGISTRY[ext](str(path)).load()
     except Exception as exc:
         raise IngestionError(f"Failed to load '{path.name}': {exc}") from exc
 
@@ -99,18 +109,27 @@ def load_document(file_path: str | Path) -> list[Document]:
 
 
 def load_text(text: str, source_name: str = "inline") -> list[Document]:
-    """Ingest raw text directly without a file upload."""
     if not text.strip():
         raise IngestionError("Cannot ingest empty text.")
 
     s = get_settings()
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=s.chunk_size, chunk_overlap=s.chunk_overlap, add_start_index=True
+        chunk_size=s.chunk_size,
+        chunk_overlap=s.chunk_overlap,
+        add_start_index=True,
     )
-    doc = Document(page_content=text, metadata={"source": source_name, "file_type": "text"})
+
+    doc = Document(
+        page_content=text,
+        metadata={"source": source_name, "file_type": "text"},
+    )
+
     chunks = splitter.split_documents([doc])
 
     for i, chunk in enumerate(chunks):
-        chunk.metadata.update({"chunk_index": i, "total_chunks": len(chunks)})
+        chunk.metadata.update({
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+        })
 
     return chunks

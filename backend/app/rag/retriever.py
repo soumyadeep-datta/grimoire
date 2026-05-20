@@ -1,131 +1,183 @@
 """
-ChromaDB vector store wrapper.
+Qdrant vector store wrapper.
 
-Stores embedded document chunks and retrieves the most
-semantically similar ones using cosine similarity search.
+Replaces ChromaDB with Qdrant for production-grade vector storage.
+Uses local persistent mode (QdrantClient(path=...)) — no Docker required
+for development; upgrade to QdrantClient(url="http://localhost:6333") for
+Docker/production deployment.
+
+Source: https://github.com/qdrant/qdrant-client
+        https://python-client.qdrant.tech/quickstart
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import List
 
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 
 from app.config import get_settings
-from app.exceptions import CollectionNotFoundError, RetrievalError
-from app.rag.embeddings import get_embeddings
+from app.exceptions import CollectionNotFoundError
+from app.rag.embeddings import embed_documents, embed_query, EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "grimoire_docs"
 
+_store: "VectorStore | None" = None
+_lock = threading.Lock()
+
 
 @dataclass
 class RetrievalResult:
-    """A retrieved chunk with its cosine similarity score (0-1, higher = better)."""
-    document: Document
+    """A single retrieved chunk with its source metadata and similarity score."""
+    content: str
     score: float
+    source: str
+    chunk_index: int
 
     @property
-    def source(self) -> str:
-        return self.document.metadata.get("source", "unknown")
-
-    @property
-    def content(self) -> str:
-        return self.document.page_content
+    def document(self) -> Document:
+        return Document(
+            page_content=self.content,
+            metadata={"source": self.source, "chunk_index": self.chunk_index},
+        )
 
 
 class VectorStore:
+    """
+    Qdrant-backed vector store using Voyage-code-3 embeddings.
+
+    Local persistent mode: data survives process restarts, stored in qdrant_data/.
+    Collection is created on first use with cosine similarity (appropriate for
+    normalized Voyage embeddings — dot product equals cosine when vectors are
+    unit-length, per Voyage docs).
+    """
 
     def __init__(self) -> None:
-        s = get_settings()
-        self._persist_dir = str(s.chroma_persist_dir)
-        self._top_k = s.retrieval_top_k
-        self._chroma: Chroma | None = None
+        settings = get_settings()
+        self._client = QdrantClient(path=str(settings.qdrant_path))
+        self._collection = COLLECTION_NAME
+        self._ensure_collection()
+        logger.info(
+            "Qdrant VectorStore initialised | path=%s | collection=%s | dim=%d",
+            settings.qdrant_path, COLLECTION_NAME, EMBEDDING_DIM,
+        )
 
-    def _get_store(self) -> Chroma:
-        if self._chroma is None:
-            self._chroma = Chroma(
-                collection_name=COLLECTION_NAME,
-                embedding_function=get_embeddings(),
-                persist_directory=self._persist_dir,
-                collection_metadata={"hnsw:space": "cosine"},
+    def _ensure_collection(self) -> None:
+        """Create the collection if it doesn't exist yet."""
+        if not self._client.collection_exists(self._collection):
+            self._client.create_collection(
+                collection_name=self._collection,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIM,
+                    distance=Distance.COSINE,
+                ),
             )
-        return self._chroma
+            logger.info("Created Qdrant collection '%s'", self._collection)
 
-    def add_documents(self, documents: list[Document]) -> int:
+    def add_documents(self, documents: List[Document]) -> int:
+        """
+        Embed and upsert documents into Qdrant.
+
+        Returns the number of chunks added.
+        """
         if not documents:
             return 0
-        try:
-            self._get_store().add_documents(documents)
-            logger.info("Stored %d chunks in ChromaDB", len(documents))
-            return len(documents)
-        except Exception as exc:
-            raise RetrievalError(f"ChromaDB write failed: {exc}") from exc
+
+        texts = [doc.page_content for doc in documents]
+        embeddings = embed_documents(texts)
+
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=embedding,
+                payload={
+                    "content": doc.page_content,
+                    "source": doc.metadata.get("source", "unknown"),
+                    "chunk_index": doc.metadata.get("chunk_index", 0),
+                    "total_chunks": doc.metadata.get("total_chunks", 1),
+                },
+            )
+            for doc, embedding in zip(documents, embeddings)
+        ]
+
+        self._client.upsert(collection_name=self._collection, points=points)
+        logger.info("Upserted %d chunks into Qdrant", len(points))
+        return len(points)
 
     def similarity_search(
-        self,
-        query: str,
-        k: int | None = None,
-        filter: dict[str, Any] | None = None,
-    ) -> list[RetrievalResult]:
-        k = k or self._top_k
-        store = self._get_store()
+        self, query: str, k: int = 5
+    ) -> List[RetrievalResult]:
+        """
+        Semantic similarity search using Voyage query embeddings.
 
-        # Fast count check — raises helpful 404 before expensive search
-        try:
-            if store._collection.count() == 0:
-                raise CollectionNotFoundError()
-        except CollectionNotFoundError:
-            raise
-        except Exception:
-            pass
+        Raises CollectionNotFoundError if the collection is empty.
+        """
+        count = self._client.count(collection_name=self._collection).count
+        if count == 0:
+            raise CollectionNotFoundError()
 
-        try:
-            results = store.similarity_search_with_relevance_scores(query, k=k, filter=filter)
-        except Exception as exc:
-            raise RetrievalError(f"ChromaDB search failed: {exc}") from exc
+        query_vector = embed_query(query)
 
-        return [RetrievalResult(document=doc, score=score) for doc, score in results]
+        results = self._client.query_points(
+            collection_name=self._collection,
+            query=query_vector,
+            limit=k,
+            with_payload=True,
+        ).points
 
-    def mmr_search(self, query: str, k: int | None = None, lambda_mult: float = 0.5) -> list[Document]:
-        """Maximal Marginal Relevance — balances relevance with diversity."""
-        k = k or self._top_k
-        try:
-            return self._get_store().max_marginal_relevance_search(
-                query, k=k, fetch_k=k * 4, lambda_mult=lambda_mult
+        return [
+            RetrievalResult(
+                content=(r.payload or {}).get("content", ""),
+                score=r.score,
+                source=(r.payload or {}).get("source", "unknown"),
+                chunk_index=(r.payload or {}).get("chunk_index", 0),
             )
-        except Exception as exc:
-            raise RetrievalError(f"MMR search failed: {exc}") from exc
+            for r in results
+        ]
 
-    def collection_stats(self) -> dict[str, Any]:
-        store = self._get_store()
+    def collection_stats(self) -> dict:
+        """Return stats about the current collection."""
         try:
-            count = store._collection.count()
-            sample = store._collection.get(limit=500, include=["metadatas"])
-            sources = {m.get("source", "unknown") for m in (sample.get("metadatas") or [])}
-            return {"total_chunks": count, "unique_sources": sorted(sources)}
+            count = self._client.count(collection_name=self._collection).count
+            # Scroll to get unique sources
+            all_points, _ = self._client.scroll(
+                collection_name=self._collection,
+                limit=10000,
+                with_payload=["source"],
+            )
+            sources = list({(p.payload or {}).get("source", "unknown") for p in all_points})
+            return {"total_chunks": count, "unique_sources": sources}
         except Exception as exc:
             logger.error("collection_stats failed: %s", exc)
             return {"total_chunks": 0, "unique_sources": []}
 
     def delete_collection(self) -> None:
-        try:
-            self._get_store()._client.delete_collection(COLLECTION_NAME)
-            self._chroma = None
-            logger.info("Collection deleted.")
-        except Exception as exc:
-            raise RetrievalError(f"Delete failed: {exc}") from exc
-
-
-_vector_store: VectorStore | None = None
+        """Wipe the entire collection."""
+        self._client.delete_collection(self._collection)
+        self._ensure_collection()
+        logger.info("Collection '%s' wiped and recreated", self._collection)
 
 
 def get_vector_store() -> VectorStore:
-    global _vector_store
-    if _vector_store is None:
-        _vector_store = VectorStore()
-    return _vector_store
+    """Return the singleton VectorStore (thread-safe, lazy init)."""
+    global _store
+    if _store is None:
+        with _lock:
+            if _store is None:
+                _store = VectorStore()
+    return _store

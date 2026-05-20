@@ -7,8 +7,10 @@ for durable, per-session conversation state.
 LangGraph 1.2 replaces the deprecated LangChain AgentExecutor pattern.
 SqliteSaver provides thread-safe persistent checkpointing keyed by thread_id.
 
-Note: create_react_agent from langgraph.prebuilt is deprecated in favour of
-langchain.agents.create_agent but remains fully functional in LangGraph 1.2.
+Memory architecture:
+    Both agent mode and direct RAG mode write to the same LangGraph SQLite
+    checkpoint store, keyed by session_id. This gives a single source of truth
+    for conversation history regardless of which query path was used.
 """
 
 from __future__ import annotations
@@ -47,19 +49,19 @@ class GrimoireAgent:
 
     Each session_id maps to a LangGraph thread_id, giving each user
     independent, persistent conversation state backed by SQLite.
+
+    Both agent mode and direct RAG mode use this class as the single
+    source of truth for conversation history.
     """
 
     def __init__(self):
         self._graph = None
-        # SqliteSaver.from_conn_string is a context manager in LangGraph 0.2+
-        # We use __enter__ to get the actual saver object
         self._cm = SqliteSaver.from_conn_string(CHECKPOINT_DB_PATH)
         self._checkpointer = self._cm.__enter__()
 
     def _build_graph(self):
         s = get_settings()
 
-        # LangChain 1.x uses model= not model_name=, max_tokens= not max_tokens_to_sample=
         llm = ChatAnthropic(
             model=s.claude_model,
             api_key=s.anthropic_api_key,
@@ -90,8 +92,8 @@ class GrimoireAgent:
         """
         Run the agent for a question, keyed by session_id.
 
-        LangGraph uses thread_id in config to scope checkpoints —
-        each session_id gets its own independent conversation history.
+        LangGraph checkpointing automatically loads prior conversation history
+        for this thread_id and appends the new exchange.
         """
         graph = self.get_graph()
         config = {"configurable": {"thread_id": session_id}}
@@ -109,7 +111,6 @@ class GrimoireAgent:
             logger.error("Agent failed: %s", exc, exc_info=True)
             raise AgentError(f"Agent failed: {exc}") from exc
 
-        # Extract answer from last AI message
         messages = result.get("messages", [])
         answer = ""
         for msg in reversed(messages):
@@ -117,7 +118,6 @@ class GrimoireAgent:
                 answer = str(msg.content)
                 break
 
-        # Extract tool calls and sources
         tools_used: list[dict[str, Any]] = []
         sources: set[str] = set()
 
@@ -140,14 +140,42 @@ class GrimoireAgent:
             sources=sorted(sources),
         )
 
-    async def arun(self, question: str, session_id: str = "default") -> AgentResponse:
+    async def arun(self, question: str, session_id: str = "default", **kwargs) -> AgentResponse:
+        """Async wrapper — offloads to thread executor, non-blocking."""
         import asyncio
-        return await asyncio.get_event_loop().run_in_executor(
-            None, self.run, question, session_id
-        )
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.run, question, session_id)
+
+    def add_to_checkpoint(self, session_id: str, question: str, answer: str) -> None:
+        """
+        Write a direct RAG exchange into the LangGraph checkpoint store.
+
+        This keeps the checkpoint store as the single source of truth for
+        conversation history regardless of which query path (agent vs direct RAG)
+        was used. Direct RAG calls this after generating an answer so that
+        subsequent agent-mode queries can see prior direct RAG turns.
+        """
+        config = {"configurable": {"thread_id": session_id}}
+        try:
+            # Get current state and append the new messages
+            graph = self.get_graph()
+            graph.update_state(
+                config,
+                {"messages": [
+                    HumanMessage(content=question),
+                    AIMessage(content=answer),
+                ]},
+            )
+            logger.debug("Wrote direct RAG exchange to checkpoint | session=%s", session_id)
+        except Exception as exc:
+            # Non-fatal — history is nice to have, not required for the response
+            logger.warning("Could not write to checkpoint for session %s: %s", session_id, exc)
 
     def get_history(self, session_id: str) -> list[dict[str, str]]:
-        """Return conversation history for a session from the checkpoint."""
+        """
+        Return full conversation history for a session from the checkpoint.
+        Works for both agent mode and direct RAG mode turns.
+        """
         config = {"configurable": {"thread_id": session_id}}
         try:
             state = self.get_graph().get_state(config)
@@ -162,6 +190,20 @@ class GrimoireAgent:
         except Exception as exc:
             logger.warning("Could not retrieve history for session %s: %s", session_id, exc)
             return []
+
+    def get_history_string(self, session_id: str) -> str:
+        """
+        Return conversation history as a formatted string for prompt injection.
+        Used by direct RAG mode to provide context for follow-up questions.
+        """
+        history = self.get_history(session_id)
+        if not history:
+            return ""
+        lines = []
+        for msg in history:
+            prefix = "User" if msg["role"] == "user" else "Grimoire"
+            lines.append(f"{prefix}: {msg['content']}")
+        return "\n".join(lines)
 
     def clear_session(self, session_id: str) -> None:
         """Clear checkpoint state for a session."""

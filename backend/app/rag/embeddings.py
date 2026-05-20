@@ -1,66 +1,89 @@
 """
-HuggingFace embedding model wrapper.
+Voyage AI embedding provider.
 
-Loads all-MiniLM-L6-v2 once as a thread-safe singleton.
-90MB weights are never re-loaded per request.
+Uses voyage-code-3, the domain-specific embedding model for code and
+technical documentation. Optimized for retrieval tasks — significantly
+outperforms general-purpose models like all-MiniLM-L6-v2 on code corpora.
+
+MTEB score: ~67+ vs ~56 for all-MiniLM-L6-v2
+Dimension: 1024 (default), normalized to unit length
+Input types: "document" for indexing, "query" for search queries
+
+Source: https://docs.voyageai.com/docs/embeddings
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import ClassVar
+from typing import Any, List
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+import voyageai  # type: ignore[import]
 
 from app.config import get_settings
-from app.exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
 
+_client: Any = None  # voyageai.Client — typed as Any to avoid stub issues
+_lock = threading.Lock()
 
-class EmbeddingModel:
+# voyage-code-3 default dimension
+EMBEDDING_DIM = 1024
+
+
+def get_embedding_client() -> Any:
+    """Return the singleton Voyage AI client (thread-safe, lazy init)."""
+    global _client
+    if _client is None:
+        with _lock:
+            if _client is None:
+                settings = get_settings()
+                _client = voyageai.Client(api_key=settings.voyage_api_key)  # type: ignore[attr-defined]
+                logger.info(
+                    "Voyage AI client initialised | model=%s | dim=%d",
+                    settings.embedding_model, EMBEDDING_DIM,
+                )
+    return _client
+
+
+def embed_documents(texts: List[str]) -> List[List[float]]:
     """
-    Thread-safe singleton around HuggingFaceEmbeddings.
-    Loaded lazily on first access — import time stays fast.
+    Embed a list of document chunks for indexing.
+
+    Uses input_type="document" per Voyage docs — automatically prepends
+    the document retrieval prompt for optimal retrieval performance.
+    Batches in groups of 128 to respect the 120K token-per-request limit.
     """
+    if not texts:
+        return []
 
-    _instance: ClassVar[HuggingFaceEmbeddings | None] = None
-    _lock: ClassVar[threading.Lock] = threading.Lock()
+    settings = get_settings()
+    client = get_embedding_client()
+    model = settings.embedding_model
 
-    @classmethod
-    def get(cls) -> HuggingFaceEmbeddings:
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:   # double-checked locking
-                    cls._instance = cls._load()
-        return cls._instance
+    embeddings: List[List[float]] = []
+    batch_size = 128
 
-    @classmethod
-    def _load(cls) -> HuggingFaceEmbeddings:
-        model_name = get_settings().embedding_model
-        logger.info("Loading embedding model: %s (first load only)", model_name)
-        try:
-            embeddings = HuggingFaceEmbeddings(
-                model_name=model_name,
-                model_kwargs={"device": "cpu"},
-                encode_kwargs={
-                    "normalize_embeddings": True,  # unit vectors → fast cosine sim
-                    "batch_size": 64,
-                },
-            )
-            _ = embeddings.embed_query("warmup")  # surface load errors at startup
-            logger.info("Embedding model ready: %s", model_name)
-            return embeddings
-        except Exception as exc:
-            raise EmbeddingError(f"Failed to load '{model_name}': {exc}") from exc
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i: i + batch_size]
+        result = client.embed(batch, model=model, input_type="document")
+        # output_dtype defaults to "float" — cast to silence Pylance union warning
+        batch_embeddings: List[List[float]] = [list(map(float, e)) for e in result.embeddings]
+        embeddings.extend(batch_embeddings)
+        logger.debug("Embedded batch %d-%d / %d", i, i + len(batch), len(texts))
 
-    @classmethod
-    def reset(cls) -> None:
-        """Unload the model. Used in tests to force a fresh load."""
-        with cls._lock:
-            cls._instance = None
+    return embeddings
 
 
-def get_embeddings() -> HuggingFaceEmbeddings:
-    return EmbeddingModel.get()
+def embed_query(text: str) -> List[float]:
+    """
+    Embed a single search query.
+
+    Uses input_type="query" per Voyage docs — prepends the query retrieval
+    prompt which is distinct from the document prompt for better retrieval.
+    """
+    settings = get_settings()
+    client = get_embedding_client()
+    result = client.embed([text], model=settings.embedding_model, input_type="query")
+    # output_dtype defaults to "float" — cast to silence Pylance union warning
+    return list(map(float, result.embeddings[0]))

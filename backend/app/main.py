@@ -9,19 +9,23 @@ Routes:
     GET  /collections — vector store stats
     GET  /health      — liveness check
 
-All routes use async handlers. CPU-bound work (embeddings, ChromaDB)
-is offloaded to a thread executor so the event loop stays responsive.
+Memory architecture:
+    Both agent mode and direct RAG mode use the LangGraph SQLite checkpoint
+    store as the single source of truth for conversation history. session_id
+    is a unified key across both query paths — history persists across server
+    restarts and is consistent regardless of which mode was used.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -34,12 +38,6 @@ from app.exceptions import (
     GrimoireError,
     IngestionError,
     UnsupportedFileTypeError,
-)
-from app.memory.conversation import (
-    add_exchange,
-    clear_session,
-    get_history_list,
-    get_history_string,
 )
 from app.models import (
     CollectionStatsResponse,
@@ -63,23 +61,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Run startup/shutdown logic around the app's lifetime.
-
-    Startup: validate settings, warm up the embedding model.
-    Shutdown: log graceful shutdown.
-    """
     settings = get_settings()
     logger.info("Grimoire starting up | env=%s", settings.environment)
 
-    # Eagerly load the embedding model so the first request isn't slow
     try:
-        from app.rag.embeddings import get_embeddings
-        get_embeddings()
-        logger.info("Embedding model warmed up.")
+        from app.rag.embeddings import get_embedding_client
+        get_embedding_client()
+        logger.info("Embedding client initialized and warmed up.")
     except Exception as exc:
-        logger.error("Embedding model warm-up failed: %s", exc)
-        # Don't crash — allow the app to start; ingestion will fail gracefully
+        logger.error("Embedding client warm-up failed: %s", exc)
 
     yield
 
@@ -101,7 +91,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.backend_cors_origins,
@@ -144,7 +133,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse, tags=["System"])
     async def health_check():
-        """Liveness probe — returns vector store stats and config summary."""
         store = get_vector_store()
         return HealthResponse(
             status="ok",
@@ -154,10 +142,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/collections", response_model=CollectionStatsResponse, tags=["RAG"])
     async def collection_stats():
-        """Return the number of indexed chunks and list of unique source files."""
         store = get_vector_store()
-        stats = store.collection_stats()
-        return CollectionStatsResponse(**stats)
+        return CollectionStatsResponse(**store.collection_stats())
 
     @app.post(
         "/ingest",
@@ -170,13 +156,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file: Annotated[UploadFile, File(description="Document to index (PDF, MD, TXT, code)")],
         settings: Settings = Depends(get_settings),
     ):
-        """
-        Upload a file and add it to the vector store.
-
-        Supported formats: PDF, Markdown, TXT, HTML, Python, JavaScript,
-        TypeScript, Go, Rust, Java, C/C++, YAML, JSON, TOML, RST.
-        """
-        import asyncio
         import tempfile
         from pathlib import Path
 
@@ -186,7 +165,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="File must have a filename.",
             )
 
-        # Write upload to a temp file so loaders can access it by path
         suffix = Path(file.filename).suffix
         content = await file.read()
 
@@ -195,15 +173,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tmp_path = tmp.name
 
         try:
-            chunks = await asyncio.get_event_loop().run_in_executor(
+            chunks = await asyncio.get_running_loop().run_in_executor(
                 None, load_document, tmp_path
             )
-            # Restore original filename in metadata
             for chunk in chunks:
                 chunk.metadata["source"] = file.filename
 
             store = get_vector_store()
-            added = await asyncio.get_event_loop().run_in_executor(
+            added = await asyncio.get_running_loop().run_in_executor(
                 None, store.add_documents, chunks
             )
         finally:
@@ -224,14 +201,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary="Index raw text directly",
     )
     async def ingest_text(body: IngestTextRequest):
-        """Ingest raw text content without a file upload."""
-        import asyncio
-
-        chunks = await asyncio.get_event_loop().run_in_executor(
+        chunks = await asyncio.get_running_loop().run_in_executor(
             None, load_text, body.content, body.source_name
         )
         store = get_vector_store()
-        added = await asyncio.get_event_loop().run_in_executor(
+        added = await asyncio.get_running_loop().run_in_executor(
             None, store.add_documents, chunks
         )
         return IngestResponse(
@@ -248,47 +222,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     async def query(body: QueryRequest):
         """
-        Answer a developer question using the ReAct agent.
+        Answer a question via the ReAct agent or direct RAG.
 
-        The agent will:
-        1. Search your ingested documentation (rag_retrieval)
-        2. Fall back to web search if needed (web_search)
-        3. Query structured data if relevant (database_query)
-        4. Run code for computations (code_executor)
+        Both modes share the LangGraph SQLite checkpoint store for memory —
+        session_id is a unified conversation key across query modes.
 
-        Set `use_agent=false` for a faster, cheaper direct-RAG-only response.
+        use_agent=true:  Full ReAct agent with tool orchestration (~15-30s)
+        use_agent=false: Direct RAG, lower latency, lower cost (~3-7s)
         """
-        import asyncio
-
         start = time.monotonic()
-
-        # Retrieve conversation history for context injection
-        chat_history = get_history_string(body.session_id)
+        agent = get_agent()
 
         if body.use_agent:
-            agent = get_agent()
+            # LangGraph handles memory automatically via checkpointing
             agent_response = await agent.arun(
                 question=body.question,
-                chat_history=chat_history,
+                session_id=body.session_id,
             )
             answer = agent_response.answer
             tools_used = [ToolTrace(**t) for t in agent_response.tools_used]
             sources = agent_response.sources
             token_usage = agent_response.token_usage
+
         else:
-            # Direct RAG mode — no agent overhead
+            # Read history from unified checkpoint store for context
+            chat_history = agent.get_history_string(body.session_id)
             answer, sources, token_usage = await _direct_rag(
-                body.question, body.retrieval_k, settings
+                body.question, body.retrieval_k, settings, chat_history
             )
             tools_used = [ToolTrace(tool="rag_retrieval", input=body.question, output_preview="")]
 
-        # Persist to memory
-        add_exchange(body.session_id, body.question, answer)
+            # Write exchange into checkpoint store so agent mode sees it too
+            await asyncio.get_running_loop().run_in_executor(
+                None, agent.add_to_checkpoint, body.session_id, body.question, answer
+            )
 
         latency_ms = (time.monotonic() - start) * 1000
         logger.info(
-            "Query answered | session=%s | latency=%.0fms | tools=%d",
-            body.session_id, latency_ms, len(tools_used),
+            "Query answered | session=%s | mode=%s | latency=%.0fms | tools=%d",
+            body.session_id,
+            "agent" if body.use_agent else "direct_rag",
+            latency_ms,
+            len(tools_used),
         )
 
         return QueryResponse(
@@ -310,7 +285,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_history(
         session_id: str = Query(default="default", description="Session ID"),
     ):
-        messages = [HistoryMessage(**m) for m in get_history_list(session_id)]
+        """
+        Returns full conversation history from the LangGraph checkpoint store.
+        Includes both agent mode and direct RAG turns for this session.
+        """
+        agent = get_agent()
+        messages = [HistoryMessage(**m) for m in agent.get_history(session_id)]
         return HistoryResponse(session_id=session_id, messages=messages)
 
     @app.delete(
@@ -322,7 +302,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_history(
         session_id: str = Query(default="default", description="Session ID"),
     ):
-        clear_session(session_id)
+        agent = get_agent()
+        agent.clear_session(session_id)
 
     @app.delete(
         "/collections",
@@ -331,34 +312,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary="Wipe the vector store",
     )
     async def delete_collection():
-        """
-        Delete all indexed documents from ChromaDB.
-        Use with caution — this is irreversible.
-        """
+        """Delete all indexed documents from Qdrant. Irreversible."""
         store = get_vector_store()
         store.delete_collection()
 
     return app
 
 
-# ── Direct RAG helper (no agent) ──────────────────────────────────────────────
+# ── Direct RAG helper ─────────────────────────────────────────────────────────
 
 async def _direct_rag(
     question: str,
     k: int,
     settings: Settings,
+    chat_history: str = "",
 ) -> tuple[str, list[str], dict]:
     """
     Retrieve top-k chunks and generate an answer directly with Claude.
     No agent loop — lower latency, lower cost.
+    Injects conversation history from the unified checkpoint store.
     """
-    import asyncio
     from langchain_anthropic import ChatAnthropic
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage
+    from pydantic import SecretStr
     from app.agent.prompts import RAG_CONTEXT_TEMPLATE
 
     store = get_vector_store()
-    results = await asyncio.get_event_loop().run_in_executor(
+    results = await asyncio.get_running_loop().run_in_executor(
         None, store.similarity_search, question, k
     )
 
@@ -369,36 +349,30 @@ async def _direct_rag(
         context_parts = []
         sources = []
         for r in results:
-            meta = r.document.metadata
-            source = meta.get("source", "unknown")
-            chunk_idx = meta.get("chunk_index", "?")
             context_parts.append(
-                f"[Source: {source}, chunk {chunk_idx}]\n{r.content}"
+                f"[Source: {r.source}, chunk {r.chunk_index}]\n{r.content}"
             )
-            sources.append(f"{source} (chunk {chunk_idx})")
+            sources.append(f"{r.source} (chunk {r.chunk_index})")
         context = "\n\n---\n\n".join(context_parts)
+
+    history_block = f"\n\nConversation so far:\n{chat_history}\n" if chat_history else ""
 
     prompt = RAG_CONTEXT_TEMPLATE.format(
         context=context,
         source="",
         chunk_index="",
         question=question,
-    )
+    ) + history_block
 
-    from pydantic import SecretStr
     llm = ChatAnthropic(
-        model_name=settings.claude_model,
+        model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
-        max_tokens_to_sample=2048,
+        max_tokens=2048,
         temperature=0.0,
         timeout=60.0,
-        stop=None,
-    )
-    response = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: llm.invoke([HumanMessage(content=prompt)]),
     )
 
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
     return str(response.content), sources, {}
 
 

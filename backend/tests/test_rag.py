@@ -105,26 +105,22 @@ class TestVectorStore:
         """Test the real VectorStore raises CollectionNotFoundError on empty collection."""
         from app.rag.retriever import VectorStore
         store = VectorStore()
-        mock_chroma = MagicMock()
-        mock_chroma._collection.count.return_value = 0
-        store._chroma = mock_chroma
+        mock_count = MagicMock()
+        mock_count.count = 0
+        store._client.count = MagicMock(return_value=mock_count)
         with pytest.raises(CollectionNotFoundError):
             store.similarity_search("anything")
 
     def test_real_store_add_empty_returns_zero(self):
         from app.rag.retriever import VectorStore
         store = VectorStore()
-        mock_chroma = MagicMock()
-        store._chroma = mock_chroma
         result = store.add_documents([])
         assert result == 0
 
     def test_collection_stats_on_error(self):
         from app.rag.retriever import VectorStore
         store = VectorStore()
-        mock_chroma = MagicMock()
-        mock_chroma._collection.count.side_effect = Exception("db error")
-        store._chroma = mock_chroma
+        store._client.count = MagicMock(side_effect=Exception("db error"))
         stats = store.collection_stats()
         assert stats["total_chunks"] == 0
         assert stats["unique_sources"] == []

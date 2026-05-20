@@ -1,51 +1,39 @@
 """
-Conversation memory management.
+Conversation memory — superseded by LangGraph checkpointing.
 
-In LangGraph 1.x, session memory is managed via SqliteSaver checkpointing
-in the agent itself (keyed by thread_id = session_id).
+This module previously managed in-memory conversation history.
+It has been replaced by the LangGraph SqliteSaver checkpoint store
+in app/agent/orchestrator.py, which provides:
 
-This module provides a thin compatibility layer for the API endpoints
-that need to read/write conversation history independently of the agent.
+    - Persistent storage across server restarts (SQLite-backed)
+    - Unified memory across both agent mode and direct RAG mode
+    - Per-session isolation via thread_id = session_id
+    - Full message history accessible via agent.get_history(session_id)
+
+This file is kept as a stub to avoid breaking any imports that reference it.
+All history operations should go through GrimoireAgent methods:
+    - agent.get_history(session_id)
+    - agent.get_history_string(session_id)
+    - agent.add_to_checkpoint(session_id, question, answer)
+    - agent.clear_session(session_id)
 """
-
-from __future__ import annotations
-
-import logging
-from collections import defaultdict
-
-logger = logging.getLogger(__name__)
-
-# Simple in-memory store for sessions not going through the agent
-# (e.g. direct RAG mode which doesn't use LangGraph)
-_sessions: dict[str, list[dict[str, str]]] = defaultdict(list)
 
 
 def add_exchange(session_id: str, human_input: str, ai_output: str) -> None:
-    """Persist a completed question-answer turn to the session."""
-    _sessions[session_id].append({"role": "user", "content": human_input})
-    _sessions[session_id].append({"role": "assistant", "content": ai_output})
-    logger.debug("Saved exchange to session '%s'", session_id)
+    """Deprecated. History is managed by LangGraph checkpointer."""
+    pass
 
 
 def get_history_string(session_id: str) -> str:
-    """Return formatted conversation history for prompt injection."""
-    messages = _sessions[session_id]
-    if not messages:
-        return ""
-    lines = []
-    for msg in messages:
-        prefix = "User" if msg["role"] == "user" else "Grimoire"
-        lines.append(f"{prefix}: {msg['content']}")
-    return "\n".join(lines)
+    """Deprecated. Use agent.get_history_string(session_id) instead."""
+    return ""
 
 
 def get_history_list(session_id: str) -> list[dict[str, str]]:
-    """Return a list of {role, content} dicts for the API /history endpoint."""
-    return list(_sessions[session_id])
+    """Deprecated. Use agent.get_history(session_id) instead."""
+    return []
 
 
 def clear_session(session_id: str) -> None:
-    """Wipe the memory for a session."""
-    if session_id in _sessions:
-        del _sessions[session_id]
-        logger.info("Cleared session '%s'", session_id)
+    """Deprecated. Use agent.clear_session(session_id) instead."""
+    pass
