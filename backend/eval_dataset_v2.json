@@ -1,97 +1,102 @@
 [
   {
-    "question": "What are the default, minimum, and maximum allowed values for the `retrieval_top_k` configuration parameter?",
-    "ground_truth": "The `retrieval_top_k` parameter has a default value of 5, a minimum allowed value of 1, and a maximum allowed value of 20.",
+    "question": "What is the default value and allowed range for `retrieval_top_k` in the RAG configuration?",
+    "ground_truth": "The `retrieval_top_k` field has a default value of 5, with a minimum allowed value of 1 and a maximum of 20.",
     "source": "grimoire_config.py"
   },
   {
-    "question": "How does a LangChain agent decide which tool to call, and what is the recommended practice for tool descriptions?",
-    "ground_truth": "A LangChain agent reads each tool's docstring to decide which tool to call. The recommended practice is to write clear, specific docstrings that explain WHEN to use the tool. For example, instead of a vague description like 'Search the database', a good docstring would be: 'Search the local knowledge base for technical documentation. Use this FIRST for any question that might be in the ingested docs.' This specificity helps the agent make correct tool selection decisions.",
+    "question": "If a developer wants to prevent the agent from running too long, what is the maximum value they can set for `agent_max_execution_time`, and what is its default?",
+    "ground_truth": "The `agent_max_execution_time` field has a maximum allowed value of 300.0 seconds and a default value of 60.0 seconds. A developer can set it up to 300.0 seconds to cap execution time, but cannot exceed that limit as enforced by the field constraint.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "How does a LangChain agent decide which tool to call?",
+    "ground_truth": "The agent reads each tool's docstring to decide which tool to call. This means writing clear, specific docstrings that explain WHEN to use the tool is critical. For example, a good docstring like 'Search the local knowledge base for technical documentation. Use this FIRST for any question that might be in the ingested docs.' gives the agent explicit guidance, whereas a vague docstring like 'Search the database' does not.",
     "source": "langchain_agents.txt"
   },
   {
-    "question": "How can you run multiple API requests simultaneously in Python async code, and what function enables this?",
-    "ground_truth": "You can run multiple API requests simultaneously using asyncio.gather(), which allows multiple coroutines to run concurrently. For example, passing multiple fetch_data() calls to asyncio.gather() will run all requests at the same time rather than sequentially, returning a list of results once all coroutines complete.",
+    "question": "What are the recommended fixes for common LangChain agent issues like agent loops, wrong tool selection, and slow responses?",
+    "ground_truth": "The recommended fixes are: (1) Agent loops \u2014 reduce max_iterations and improve the Final Answer instructions in the prompt; (2) Wrong tool selected \u2014 improve tool descriptions/docstrings; (3) Malformed output \u2014 set handle_parsing_errors=True; (4) Slow responses \u2014 use direct RAG for simple questions and reserve the agent only when needed.",
+    "source": "langchain_agents.txt"
+  },
+  {
+    "question": "What is the entry point for running async code in Python?",
+    "ground_truth": "asyncio.run() is the entry point for running async code in Python.",
     "source": "python_async.txt"
   },
   {
-    "question": "What happens when a sync endpoint is defined in FastAPI versus an async endpoint?",
-    "ground_truth": "In FastAPI, sync endpoints (defined with `def`) are automatically run in a thread pool, while async endpoints (defined with `async def`) run on the event loop.",
+    "question": "How can you run multiple API requests simultaneously instead of sequentially in Python async code?",
+    "ground_truth": "You can use asyncio.gather() to run multiple coroutines concurrently. By passing multiple coroutines to asyncio.gather(), such as multiple fetch_data() calls, all requests run simultaneously rather than one after another. For example: results = await asyncio.gather(fetch_data(url1), fetch_data(url2), fetch_data(url3)).",
+    "source": "python_async.txt"
+  },
+  {
+    "question": "How do you handle a 404 error in FastAPI when an item is not found in the database?",
+    "ground_truth": "You raise an HTTPException with status_code=404 and a detail message. For example: `raise HTTPException(status_code=404, detail=\"Item not found\")` inside the endpoint function after checking if the item exists in the database.",
     "source": "fastapi_concepts.md"
   },
   {
-    "question": "What is the purpose of specifying a `response_model` in a FastAPI route decorator?",
-    "ground_truth": "Specifying a `response_model` in a FastAPI route decorator causes FastAPI to filter the response to only include the fields declared in that Pydantic model. For example, using `response_model=ItemResponse` ensures the response only contains the `name` and `price` fields defined in `ItemResponse`, even if the underlying data contains additional fields.",
+    "question": "What is the difference between sync and async endpoints in FastAPI?",
+    "ground_truth": "In FastAPI, sync endpoints (defined with `def`) run automatically in a thread pool, while async endpoints (defined with `async def`) run on the event loop. Both are supported, allowing developers to choose based on whether their operations are blocking or non-blocking.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "What happens to the response data when a response_model is specified in FastAPI?",
+    "ground_truth": "FastAPI will filter the response to only include fields declared in the response model. For example, if response_model=ItemResponse is specified and ItemResponse only declares 'name' and 'price' fields, any additional fields in the returned data will be excluded from the response.",
+    "source": "fastapi_concepts.md"
+  },
+  {
+    "question": "How do you import and use TestClient to test a FastAPI endpoint?",
+    "ground_truth": "You import TestClient from fastapi.testclient with 'from fastapi.testclient import TestClient', then create a client instance by passing your app: 'client = TestClient(app)'. You can then make requests in your test functions using methods like client.get(), and assert on the response's status_code and json() output.",
     "source": "fastapi_concepts.md"
   },
   {
     "question": "What happens if required configuration keys are missing when the application starts?",
-    "ground_truth": "The application refuses to start if required keys are missing, surfacing configuration errors immediately. All settings are validated at startup.",
+    "ground_truth": "The application refuses to start if required keys are missing, surfacing config errors immediately at startup.",
     "source": "grimoire_config.py"
   },
   {
-    "question": "What is the purpose of the `handle_parsing_errors` setting in the Agent Executor, and what problem does it solve?",
-    "ground_truth": "The `handle_parsing_errors` setting allows the Agent Executor to recover from malformed LLM output instead of crashing. This means that if the LLM produces output that cannot be properly parsed, the agent will handle the error gracefully and continue functioning rather than throwing an exception and terminating.",
+    "question": "What library is used to define and validate the application settings class?",
+    "ground_truth": "The application uses pydantic-settings (BaseSettings) along with pydantic (Field, field_validator, model_validator) to define and validate the application settings.",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "What are the three components that make up a tool in LangChain agents?",
+    "ground_truth": "Each tool in LangChain has three components: a name (how the agent refers to it), a description (when and how to use it, which the agent reads), and a function (the actual implementation).",
     "source": "langchain_agents.txt"
   },
   {
-    "question": "What two conditions must both be true for `is_tracing_enabled` to return `True`?",
-    "ground_truth": "For `is_tracing_enabled` to return `True`, both `langchain_tracing_v2` must be truthy AND `langchain_api_key` must be a non-empty/non-None value (i.e., `bool(self.langchain_api_key)` must be `True`).",
+    "question": "Why would you use the `return_intermediate_steps` setting in an Agent Executor, and what does it expose?",
+    "ground_truth": "The `return_intermediate_steps` setting is used for debugging and UI display purposes. It exposes every tool call made by the agent, allowing developers to inspect the agent's step-by-step reasoning and actions.",
+    "source": "langchain_agents.txt"
+  },
+  {
+    "question": "What conditions must both be true for `is_tracing_enabled` to return True?",
+    "ground_truth": "Both `langchain_tracing_v2` must be truthy AND `langchain_api_key` must be a non-empty/non-None value (i.e., `bool(self.langchain_api_key)` must be True).",
+    "source": "grimoire_config.py"
+  },
+  {
+    "question": "Why does the `ensure_dirs_exist` validator use `exist_ok=True` when creating directories?",
+    "ground_truth": "Using `exist_ok=True` prevents errors if the directories already exist, ensuring the validator runs safely on every instantiation without raising a `FileExistsError`. This guarantees ChromaDB and SQLite never fail on first run due to missing directories.",
     "source": "grimoire_config.py"
   },
   {
     "question": "How do you use dependency injection in FastAPI to share common query parameters across multiple endpoints?",
-    "ground_truth": "In FastAPI, you can use the `Depends` function from `fastapi` to inject shared dependencies. You define a dependency function (e.g., `common_parameters`) that accepts and returns the shared parameters, then use it in your endpoint by declaring a parameter with `Depends(common_parameters)` as its default value. For example: `async def read_items(commons: dict = Depends(common_parameters))`. FastAPI will automatically call the dependency function and pass its return value to the endpoint.",
+    "ground_truth": "In FastAPI, you can use the `Depends` function from `fastapi` to inject shared dependencies. You define a function with the common parameters (e.g., `async def common_parameters(q: str = None, skip: int = 0, limit: int = 100)`) and then use it in your endpoint by declaring a parameter with `Depends(common_parameters)` as its default value, like `commons: dict = Depends(common_parameters)`. FastAPI will automatically call the dependency function and pass its return value to the endpoint.",
     "source": "fastapi_concepts.md"
   },
   {
-    "question": "What happens if you set chunk_overlap to a value greater than or equal to chunk_size in the configuration?",
-    "ground_truth": "A ValueError is raised with the message 'chunk_overlap ({v}) must be < chunk_size ({chunk_size})'. The overlap_less_than_chunk field validator enforces that chunk_overlap must be strictly less than chunk_size (which defaults to 1000 if not set).",
-    "source": "grimoire_config.py"
-  },
-  {
-    "question": "How should tests handle the `get_settings()` function when they need to patch environment variables?",
-    "ground_truth": "Tests should call `get_settings.cache_clear()` before patching environment variables. This is necessary because the `.env` file is parsed exactly once per process via a singleton pattern, so clearing the cache ensures the settings are reloaded with the patched environment variables rather than using the previously cached instance.",
-    "source": "grimoire_config.py"
-  },
-  {
-    "question": "What is the sequence of steps in the ReAct agent pattern, and how does it progress to a final answer?",
-    "ground_truth": "The ReAct (Reasoning + Acting) pattern has the agent alternate through the following steps: Thought (what do I need to know?), Action (which tool should I call?), Action Input (what do I pass to the tool?), and Observation (what did the tool return?). This cycle repeats until enough information has been gathered, at which point the agent produces a Final Answer as the response to the user.",
-    "source": "langchain_agents.txt"
-  },
-  {
-    "question": "How does Grimoire call ChromaDB and the embedding model without blocking the FastAPI event loop?",
-    "ground_truth": "Grimoire uses `run_in_executor` to offload the blocking calls to ChromaDB and the embedding model to a thread pool, preventing them from blocking the FastAPI event loop. This is done with `await loop.run_in_executor(None, blocking_function, arg1, arg2)`, where `None` uses the default thread pool executor.",
-    "source": "python_async.txt"
-  },
-  {
-    "question": "What is the difference between PersistentClient and EphemeralClient in ChromaDB in terms of data storage?",
-    "ground_truth": "PersistentClient automatically saves data to disk, meaning data survives process restarts. EphemeralClient stores data in memory only, so all data is lost when the process restarts. PersistentClient is recommended for production use, while EphemeralClient is suited for testing.",
-    "source": "chromadb_reference.txt"
-  },
-  {
-    "question": "What HTTP status code does FastAPI return when a path parameter fails type validation?",
-    "ground_truth": "FastAPI returns a 422 error when a path parameter fails type validation.",
+    "question": "What is the purpose of BackgroundTasks in FastAPI, and how are they added to an endpoint?",
+    "ground_truth": "BackgroundTasks in FastAPI allow you to run operations after a response has been returned to the client, so the client doesn't have to wait for those operations to complete. To use them, you import `BackgroundTasks` from `fastapi`, add a `BackgroundTasks` parameter to your endpoint function, and then call `background_tasks.add_task()` with the function you want to run and its arguments. For example, `background_tasks.add_task(write_notification, email, message='some notification')` schedules `write_notification` to run after the response is sent.",
     "source": "fastapi_concepts.md"
   },
   {
-    "question": "How do you add a background task in FastAPI that sends an email after returning a response?",
-    "ground_truth": "In FastAPI, you can add a background task by injecting `BackgroundTasks` as a parameter in your route function, then calling `background_tasks.add_task()` with the function and its arguments. For example: define the route with `async def create_item(background_tasks: BackgroundTasks)`, then call `background_tasks.add_task(send_email, 'user@example.com')` before returning the response. This allows the endpoint to immediately return `{'status': 'processing'}` while the email is sent in the background.",
-    "source": "python_async.txt"
-  },
-  {
-    "question": "What are the valid range constraints for the `claude_max_tokens` and `claude_temperature` fields in the Settings class?",
-    "ground_truth": "The `claude_max_tokens` field has a minimum value of 256 (ge=256) and a maximum value of 8192 (le=8192), with a default of 4096. The `claude_temperature` field has a minimum value of 0.0 (ge=0.0) and a maximum value of 1.0 (le=1.0), with a default of 0.0.",
+    "question": "What are the valid values for the `log_level` field, and what happens if an invalid value is provided?",
+    "ground_truth": "The valid values for `log_level` are `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL` (case-insensitive, as the validator converts the input to uppercase). If an invalid value is provided, a `ValueError` is raised with the message: `log_level must be one of {valid}, got '{v}'`.",
     "source": "grimoire_config.py"
   },
   {
-    "question": "What are the default CORS origins configured for the backend in grimoire_config.py?",
-    "ground_truth": "The default CORS origins configured for the backend are 'http://localhost:3000' and 'http://localhost:5173'.",
+    "question": "Why would setting `chunk_overlap` equal to or greater than `chunk_size` cause an error, and what is the default value assumed for `chunk_size` if it is not provided?",
+    "ground_truth": "Setting `chunk_overlap` equal to or greater than `chunk_size` causes a `ValueError` because the `overlap_less_than_chunk` validator enforces that `chunk_overlap` must be strictly less than `chunk_size`. This constraint likely exists to ensure that overlapping chunks still make logical sense \u2014 an overlap equal to or exceeding the chunk size would mean chunks are not advancing meaningfully through the content. If `chunk_size` is not present in the data, the validator defaults to assuming a `chunk_size` of `1000`.",
     "source": "grimoire_config.py"
-  },
-  {
-    "question": "Which distance metric should I use in ChromaDB when working with normalised embeddings for semantic similarity, and how do I configure it?",
-    "ground_truth": "You should use cosine distance for semantic similarity with normalised embeddings. Configure it by setting the metadata parameter `hnsw:space` to `cosine` when creating a collection: `collection = client.create_collection(name='my_collection', metadata={'hnsw:space': 'cosine'})`. Note that the default distance metric is `l2` (Euclidean distance) if no space is specified.",
-    "source": "chromadb_reference.txt"
   }
 ]
