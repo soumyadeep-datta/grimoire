@@ -187,7 +187,7 @@ def ast_chunk_file(
     ext = Path(file_path).suffix.lower()
     parser, chunk_types = _get_parser(ext)
 
-    if parser is None:
+    if parser is None or chunk_types is None:
         # Fallback for unsupported languages
         logger.debug("No AST parser for %s — falling back to text splitter", ext)
         return _fallback_split(source_code, source_name, chunk_size, chunk_overlap)

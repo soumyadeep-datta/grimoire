@@ -66,15 +66,20 @@ _CODE_EXTENSIONS = {
 
 def _build_splitter(ext: str) -> RecursiveCharacterTextSplitter:
     s = get_settings()
-    kwargs = dict(
+    if ext in _CODE_EXTENSIONS:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=s.chunk_size,
+            chunk_overlap=s.chunk_overlap,
+            length_function=len,
+            add_start_index=True,
+            separators=_CODE_SEPARATORS,
+        )
+    return RecursiveCharacterTextSplitter(
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
         length_function=len,
         add_start_index=True,
     )
-    if ext in _CODE_EXTENSIONS:
-        kwargs["separators"] = _CODE_SEPARATORS
-    return RecursiveCharacterTextSplitter(**kwargs)
 
 
 def _load_as_text(path: Path) -> list[Document]:
