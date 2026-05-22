@@ -83,7 +83,19 @@ def embed_documents(texts: List[str]) -> List[List[float]]:
         embeddings: List[List[float]] = []
         for i in range(0, len(texts), 128):
             batch = texts[i: i + 128]
-            result = client.embed(batch, model=settings.embedding_model, input_type="document")
+            try:
+                result = client.embed(batch, model=settings.embedding_model, input_type="document")
+            except Exception as exc:
+                err_str = str(exc)
+                if "429" in err_str or "rate" in err_str.lower():
+                    from app.exceptions import RateLimitError
+                    raise RateLimitError(
+                        "Voyage AI rate limit exceeded. Please wait and try again."
+                    ) from exc
+                from app.exceptions import UpstreamProviderError
+                raise UpstreamProviderError(
+                    f"Voyage AI embedding failed: {exc}"
+                ) from exc
             embeddings.extend([list(map(float, e)) for e in result.embeddings])
         return embeddings
     else:
@@ -98,7 +110,17 @@ def embed_query(text: str) -> List[float]:
     settings = get_settings()
 
     if provider == "voyage":
-        result = client.embed([text], model=settings.embedding_model, input_type="query")
+        try:
+            result = client.embed([text], model=settings.embedding_model, input_type="query")
+        except Exception as exc:
+            err_str = str(exc)
+            if "429" in err_str or "rate" in err_str.lower():
+                from app.exceptions import RateLimitError
+                raise RateLimitError(
+                    "Voyage AI rate limit exceeded. Please wait and try again."
+                ) from exc
+            from app.exceptions import UpstreamProviderError
+            raise UpstreamProviderError(f"Voyage AI embedding failed: {exc}") from exc
         return list(map(float, result.embeddings[0]))
     else:
         vec = client.encode([text], show_progress_bar=False, convert_to_numpy=True)

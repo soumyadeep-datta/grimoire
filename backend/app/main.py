@@ -39,9 +39,13 @@ from app.config import Settings, get_settings
 from app.exceptions import (
     AgentError,
     AgentTimeoutError,
+    CollectionMismatchError,
     CollectionNotFoundError,
     GrimoireError,
     IngestionError,
+    RateLimitError,
+    ServiceOverloadedError,
+    UpstreamProviderError,
     UnsupportedFileTypeError,
 )
 from app.models import (
@@ -127,6 +131,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content=ErrorResponse(error="Not Found", detail=exc.message).model_dump(),
         )
 
+    @app.exception_handler(CollectionMismatchError)
+    async def collection_mismatch_handler(request, exc: CollectionMismatchError):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=ErrorResponse(error="Conflict", detail=exc.message).model_dump(),
+        )
+
     @app.exception_handler(UnsupportedFileTypeError)
     async def unsupported_file_handler(request, exc: UnsupportedFileTypeError):
         return JSONResponse(
@@ -138,7 +149,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def agent_timeout_handler(request, exc: AgentTimeoutError):
         return JSONResponse(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            content=ErrorResponse(error="Agent Timeout", detail=exc.message).model_dump(),
+            content=ErrorResponse(error="Gateway Timeout", detail=exc.message).model_dump(),
+        )
+
+    @app.exception_handler(RateLimitError)
+    async def rate_limit_handler(request, exc: RateLimitError):
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content=ErrorResponse(error="Rate Limited", detail=exc.message).model_dump(),
+        )
+
+    @app.exception_handler(ServiceOverloadedError)
+    async def service_overloaded_handler(request, exc: ServiceOverloadedError):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=ErrorResponse(error="Service Unavailable", detail=exc.message).model_dump(),
+        )
+
+    @app.exception_handler(UpstreamProviderError)
+    async def upstream_provider_handler(request, exc: UpstreamProviderError):
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content=ErrorResponse(error="Bad Gateway", detail=exc.message).model_dump(),
         )
 
     @app.exception_handler(GrimoireError)

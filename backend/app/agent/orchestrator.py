@@ -131,6 +131,13 @@ class GrimoireAgent:
         except TimeoutError as exc:
             raise AgentTimeoutError() from exc
         except Exception as exc:
+            err_str = str(exc)
+            if "overloaded" in err_str.lower() or "529" in err_str:
+                from app.exceptions import ServiceOverloadedError
+                raise ServiceOverloadedError() from exc
+            if "rate_limit" in err_str.lower() or "429" in err_str or "RateLimitError" in type(exc).__name__:
+                from app.exceptions import RateLimitError
+                raise RateLimitError() from exc
             logger.error("Agent failed: %s", exc, exc_info=True)
             raise AgentError(f"Agent failed: {exc}") from exc
 

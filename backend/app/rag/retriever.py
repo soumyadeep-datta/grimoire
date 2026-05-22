@@ -230,8 +230,14 @@ class VectorStore:
 
         n_candidates = min(k * CANDIDATE_MULTIPLIER, len(self._all_chunks))
 
-        # Stage 1: Dense
-        dense_ids = self._dense_search(query, n_candidates)
+        try:
+            # Stage 1: Dense
+            dense_ids = self._dense_search(query, n_candidates)
+        except ValueError as exc:
+            if "not aligned" in str(exc) or "shapes" in str(exc):
+                from app.exceptions import CollectionMismatchError
+                raise CollectionMismatchError() from exc
+            raise
         id_to_idx = {chunk["qdrant_id"]: i for i, chunk in enumerate(self._all_chunks)}
         dense_ranked = [id_to_idx[did] for did in dense_ids if did in id_to_idx]
 
@@ -256,7 +262,14 @@ class VectorStore:
                 final_indices = [r.index for r in rerank_response.results]
                 final_scores = [r.relevance_score for r in rerank_response.results]
             except Exception as exc:
-                logger.warning("Cohere rerank failed, using RRF order: %s", exc)
+                err_str = str(exc)
+                if "429" in err_str or "rate" in err_str.lower():
+                    from app.exceptions import RateLimitError
+                    raise RateLimitError(
+                        "Cohere API rate limit exceeded. Please wait and try again."
+                    ) from exc
+                # Other Cohere errors — fall back gracefully to RRF order
+                logger.warning("Cohere rerank failed, falling back to RRF order: %s", exc)
                 final_indices = list(range(min(k, len(candidate_chunks))))
                 final_scores = [1.0 - i * 0.1 for i in final_indices]
         else:
