@@ -269,7 +269,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             answer, sources, token_usage = await _direct_rag(
                 body.question, body.retrieval_k, settings, chat_history
             )
-            tools_used = [ToolTrace(tool="rag_retrieval", input=body.question, output_preview="")]
+            tools_used = [ToolTrace(tool="rag_retrieval", input=body.question)]
 
             # Write exchange into checkpoint store so agent mode sees it too
             await asyncio.get_running_loop().run_in_executor(

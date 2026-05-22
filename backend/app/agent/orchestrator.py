@@ -114,6 +114,20 @@ class GrimoireAgent:
                 {"messages": [HumanMessage(content=question)]},
                 config=config,
             )
+        except ValueError as exc:
+            if "INVALID_CHAT_HISTORY" in str(exc) or "ToolMessage" in str(exc):
+                # Corrupted checkpoint — clear and retry once
+                logger.warning(
+                    "Corrupted checkpoint for session '%s' — clearing and retrying",
+                    session_id
+                )
+                self.clear_session(session_id)
+                result = graph.invoke(
+                    {"messages": [HumanMessage(content=question)]},
+                    config=config,
+                )
+            else:
+                raise AgentError(f"Agent failed: {exc}") from exc
         except TimeoutError as exc:
             raise AgentTimeoutError() from exc
         except Exception as exc:
@@ -133,10 +147,12 @@ class GrimoireAgent:
         for msg in messages:
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
+                    # Extract just the query string from args for clean output
+                    args = tc.get("args", {})
+                    clean_input = args.get("query", args.get("code", str(args)))
                     tools_used.append({
                         "tool": tc.get("name", "unknown"),
-                        "input": str(tc.get("args", "")),
-                        "output_preview": "",
+                        "input": clean_input,
                     })
             if hasattr(msg, "content") and "| Source:" in str(msg.content):
                 for line in str(msg.content).splitlines():
