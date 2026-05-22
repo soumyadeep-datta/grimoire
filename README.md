@@ -71,11 +71,14 @@ Answer with citations
 ### Setup
 
 ```bash
-git clone https://github.com/your-username/grimoire.git
+git clone https://github.com/soumyadeep-datta/grimoire.git
 cd grimoire/backend
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# Verify all dependencies installed correctly
+python verify_setup.py
 
 cp .env.example .env
 # Fill in ANTHROPIC_API_KEY (required) and optional keys
@@ -216,3 +219,21 @@ pytest tests/ -v --cov=app --cov-report=term-missing
 | Text | `.md` `.txt` `.html` `.rst` | RecursiveCharacterTextSplitter |
 | Config | `.yaml` `.json` `.toml` | RecursiveCharacterTextSplitter |
 | More | `.go` `.rs` `.java` `.cpp` `.c` | RecursiveCharacterTextSplitter |
+
+---
+
+## Error Handling
+
+Grimoire returns typed HTTP status codes — no generic 500s for upstream issues:
+
+| HTTP Status | When |
+|---|---|
+| `404 Not Found` | No documents ingested yet |
+| `409 Conflict` | Embedding dimension mismatch (switched providers without re-ingesting) |
+| `415 Unsupported Media` | Unsupported file type |
+| `429 Too Many Requests` | Anthropic, Voyage, or Cohere rate limit hit |
+| `503 Service Unavailable` | Anthropic temporarily overloaded |
+| `502 Bad Gateway` | Voyage or Cohere returned an unexpected error |
+| `504 Gateway Timeout` | Agent exceeded execution time limit |
+
+Corrupted LangGraph checkpoints (from mid-request server crashes) are automatically detected and cleared on the next request — no user action required.
