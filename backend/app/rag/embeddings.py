@@ -1,15 +1,18 @@
 """
-Voyage AI embedding provider.
+Embedding provider with automatic fallback.
 
-Uses voyage-code-3, the domain-specific embedding model for code and
-technical documentation. Optimized for retrieval tasks — significantly
-outperforms general-purpose models like all-MiniLM-L6-v2 on code corpora.
+Priority:
+    1. Voyage-code-3.5  — if VOYAGE_API_KEY is set (production, MTEB ~67)
+    2. all-MiniLM-L6-v2 — local fallback, no key needed (MTEB ~56, dim=384)
 
-MTEB score: ~67+ vs ~56 for all-MiniLM-L6-v2
-Dimension: 1024 (default), normalized to unit length
-Input types: "document" for indexing, "query" for search queries
+The provider is selected once at startup and cached for the process lifetime.
+Switching providers requires wiping the Qdrant collection and re-ingesting,
+since embedding dimensions differ (1024 vs 384).
 
-Source: https://docs.voyageai.com/docs/embeddings
+Interface is identical regardless of provider:
+    embed_documents(texts) -> List[List[float]]
+    embed_query(text)      -> List[float]
+    EMBEDDING_DIM          -> int
 """
 
 from __future__ import annotations
@@ -18,72 +21,85 @@ import logging
 import threading
 from typing import Any, List
 
-import voyageai  # type: ignore[import]
-
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_client: Any = None  # voyageai.Client — typed as Any to avoid stub issues
+_client: Any = None
 _lock = threading.Lock()
+EMBEDDING_DIM: int = 1024  # updated at init time
 
-# voyage-code-3 default dimension
-EMBEDDING_DIM = 1024
+
+def _init_voyage() -> tuple[Any, int]:
+    """Initialize Voyage AI client."""
+    import voyageai  # type: ignore[import]
+    settings = get_settings()
+    client = voyageai.Client(api_key=settings.voyage_api_key)  # type: ignore[attr-defined]
+    logger.info("Embedder: Voyage-code-3.5 | dim=1024 | mode=production")
+    return ("voyage", client), 1024
+
+
+def _init_local() -> tuple[Any, int]:
+    """Initialize local SentenceTransformer model."""
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    dim = model.get_embedding_dimension()
+    logger.info(
+        "Embedder: all-MiniLM-L6-v2 | dim=%d | mode=local-fallback "
+        "(set VOYAGE_API_KEY for production embeddings)",
+        dim
+    )
+    return ("local", model), dim
 
 
 def get_embedding_client() -> Any:
-    """Return the singleton Voyage AI client (thread-safe, lazy init)."""
-    global _client
+    """
+    Return the singleton embedding client (thread-safe, lazy init).
+    Selects Voyage if VOYAGE_API_KEY is set, otherwise local fallback.
+    """
+    global _client, EMBEDDING_DIM
     if _client is None:
         with _lock:
             if _client is None:
                 settings = get_settings()
-                _client = voyageai.Client(api_key=settings.voyage_api_key)  # type: ignore[attr-defined]
-                logger.info(
-                    "Voyage AI client initialised | model=%s | dim=%d",
-                    settings.embedding_model, EMBEDDING_DIM,
-                )
+                if settings.voyage_api_key:
+                    _client, EMBEDDING_DIM = _init_voyage()
+                else:
+                    _client, EMBEDDING_DIM = _init_local()
     return _client
 
 
 def embed_documents(texts: List[str]) -> List[List[float]]:
-    """
-    Embed a list of document chunks for indexing.
-
-    Uses input_type="document" per Voyage docs — automatically prepends
-    the document retrieval prompt for optimal retrieval performance.
-    Batches in groups of 128 to respect the 120K token-per-request limit.
-    """
+    """Embed a list of document chunks for indexing."""
     if not texts:
         return []
 
+    provider, client = get_embedding_client()
     settings = get_settings()
-    client = get_embedding_client()
-    model = settings.embedding_model
 
-    embeddings: List[List[float]] = []
-    batch_size = 128
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i: i + batch_size]
-        result = client.embed(batch, model=model, input_type="document")
-        # output_dtype defaults to "float" — cast to silence Pylance union warning
-        batch_embeddings: List[List[float]] = [list(map(float, e)) for e in result.embeddings]
-        embeddings.extend(batch_embeddings)
-        logger.debug("Embedded batch %d-%d / %d", i, i + len(batch), len(texts))
-
-    return embeddings
+    if provider == "voyage":
+        embeddings: List[List[float]] = []
+        for i in range(0, len(texts), 128):
+            batch = texts[i: i + 128]
+            result = client.embed(batch, model=settings.embedding_model, input_type="document")
+            embeddings.extend([list(map(float, e)) for e in result.embeddings])
+        return embeddings
+    else:
+        # Local SentenceTransformer
+        vecs = client.encode(texts, show_progress_bar=False, convert_to_numpy=True)
+        return [v.tolist() for v in vecs]
 
 
 def embed_query(text: str) -> List[float]:
-    """
-    Embed a single search query.
-
-    Uses input_type="query" per Voyage docs — prepends the query retrieval
-    prompt which is distinct from the document prompt for better retrieval.
-    """
+    """Embed a single search query."""
+    provider, client = get_embedding_client()
     settings = get_settings()
-    client = get_embedding_client()
-    result = client.embed([text], model=settings.embedding_model, input_type="query")
-    # output_dtype defaults to "float" — cast to silence Pylance union warning
-    return list(map(float, result.embeddings[0]))
+
+    if provider == "voyage":
+        result = client.embed([text], model=settings.embedding_model, input_type="query")
+        return list(map(float, result.embeddings[0]))
+    else:
+        vec = client.encode([text], show_progress_bar=False, convert_to_numpy=True)
+        return vec[0].tolist()

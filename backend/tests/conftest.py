@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 os.environ["VOYAGE_API_KEY"] = "test-voyage-key"
+os.environ["COHERE_API_KEY"] = "test-cohere-key"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 

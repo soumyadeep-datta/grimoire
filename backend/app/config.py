@@ -3,6 +3,13 @@ Application configuration loaded from environment variables / .env file.
 
 All settings are validated at startup — the app refuses to start if
 required keys are missing, surfacing config errors immediately.
+
+Minimum required: ANTHROPIC_API_KEY only.
+Optional keys unlock additional capabilities:
+    VOYAGE_API_KEY  → Voyage-code-3.5 embeddings (recommended)
+    COHERE_API_KEY  → Cohere Rerank v4 (recommended)
+    TAVILY_API_KEY  → Web search tool
+    OPENAI_API_KEY  → DeepEval evaluation scoring
 """
 
 from __future__ import annotations
@@ -31,23 +38,32 @@ class Settings(BaseSettings):
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
 
-    # ── LLM ────────────────────────────────────────────────────────────────────
-    anthropic_api_key: str = Field(..., description="Required")
+    # ── LLM (Required) ────────────────────────────────────────────────────────
+    anthropic_api_key: str = Field(..., description="Required — Claude for generation")
     claude_model: str = Field(default="claude-sonnet-4-6")
     claude_max_tokens: int = Field(default=4096, ge=256, le=8192)
     claude_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
 
-    # ── Web Search ─────────────────────────────────────────────────────────────
-    tavily_api_key: str = Field(..., description="Required")
-
-    # ── Embeddings (Voyage AI) ─────────────────────────────────────────────────
-    voyage_api_key: str = Field(..., description="Required for Voyage-code-3.5 embeddings")
+    # ── Embeddings (Optional — falls back to local all-MiniLM-L6-v2) ──────────
+    voyage_api_key: str | None = Field(
+        default=None,
+        description="Optional — enables Voyage-code-3.5 embeddings (recommended)"
+    )
     embedding_model: str = Field(default="voyage-code-3.5")
 
-    # ── Reranking (Cohere) ─────────────────────────────────────────────────────
-    cohere_api_key: str = Field(..., description="Required for Cohere Rerank v4")
+    # ── Reranking (Optional — skips reranking stage if not set) ───────────────
+    cohere_api_key: str | None = Field(
+        default=None,
+        description="Optional — enables Cohere Rerank v4 (recommended)"
+    )
 
-    # ── Evaluation (OpenAI for DeepEval scoring) ───────────────────────────────
+    # ── Web Search (Optional — disables web search tool if not set) ───────────
+    tavily_api_key: str | None = Field(
+        default=None,
+        description="Optional — enables Tavily web search tool"
+    )
+
+    # ── Evaluation (Optional — only needed for DeepEval scoring) ──────────────
     openai_api_key: str | None = Field(default=None)
 
     # ── Observability ──────────────────────────────────────────────────────────
@@ -104,6 +120,18 @@ class Settings(BaseSettings):
     def is_tracing_enabled(self) -> bool:
         return self.langchain_tracing_v2 and bool(self.langchain_api_key)
 
+    @property
+    def embedding_provider(self) -> str:
+        return "voyage" if self.voyage_api_key else "local"
+
+    @property
+    def reranking_enabled(self) -> bool:
+        return bool(self.cohere_api_key)
+
+    @property
+    def web_search_enabled(self) -> bool:
+        return bool(self.tavily_api_key)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -115,8 +143,12 @@ def get_settings() -> Settings:
     settings = Settings()
     _configure_logging(settings.log_level)
     logger.info(
-        "Settings loaded | env=%s | model=%s | tracing=%s",
-        settings.environment, settings.claude_model, settings.is_tracing_enabled,
+        "Settings loaded | env=%s | model=%s | embedder=%s | reranking=%s | web_search=%s",
+        settings.environment,
+        settings.claude_model,
+        settings.embedding_provider,
+        settings.reranking_enabled,
+        settings.web_search_enabled,
     )
     return settings
 

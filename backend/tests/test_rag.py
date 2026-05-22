@@ -104,30 +104,46 @@ class TestVectorStore:
     def test_real_store_empty_collection_raises(self, tmp_path):
         """Test the real VectorStore raises CollectionNotFoundError on empty collection."""
         from app.rag.retriever import VectorStore
-        with patch("app.rag.retriever.get_settings") as mock_settings:
+        with patch("app.rag.retriever.get_settings") as mock_settings, \
+             patch("app.rag.retriever.get_embedding_client"), \
+             patch("app.rag.retriever.EMBEDDING_DIM", 1024):
             mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
             mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            mock_settings.return_value.cohere_api_key = None
+            mock_settings.return_value.voyage_api_key = "test"
+            mock_settings.return_value.embedding_provider = "voyage"
             store = VectorStore()
             mock_count = MagicMock()
             mock_count.count = 0
             store._client.count = MagicMock(return_value=mock_count)
+            store._all_chunks = []
             with pytest.raises(CollectionNotFoundError):
                 store.similarity_search("anything")
 
     def test_real_store_add_empty_returns_zero(self, tmp_path):
         from app.rag.retriever import VectorStore
-        with patch("app.rag.retriever.get_settings") as mock_settings:
+        with patch("app.rag.retriever.get_settings") as mock_settings, \
+             patch("app.rag.retriever.get_embedding_client"), \
+             patch("app.rag.retriever.EMBEDDING_DIM", 1024):
             mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
             mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            mock_settings.return_value.cohere_api_key = None
+            mock_settings.return_value.voyage_api_key = "test"
+            mock_settings.return_value.embedding_provider = "voyage"
             store = VectorStore()
             result = store.add_documents([])
             assert result == 0
 
     def test_collection_stats_on_error(self, tmp_path):
         from app.rag.retriever import VectorStore
-        with patch("app.rag.retriever.get_settings") as mock_settings:
+        with patch("app.rag.retriever.get_settings") as mock_settings, \
+             patch("app.rag.retriever.get_embedding_client"), \
+             patch("app.rag.retriever.EMBEDDING_DIM", 1024):
             mock_settings.return_value.qdrant_path = tmp_path / "qdrant"
             mock_settings.return_value.embedding_model = "voyage-code-3.5"
+            mock_settings.return_value.cohere_api_key = None
+            mock_settings.return_value.voyage_api_key = "test"
+            mock_settings.return_value.embedding_provider = "voyage"
             store = VectorStore()
             store._client.count = MagicMock(side_effect=Exception("db error"))
             stats = store.collection_stats()

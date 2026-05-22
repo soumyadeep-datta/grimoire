@@ -37,14 +37,14 @@ class TestWebSearch:
             "answer": "FastAPI is fast.",
             "results": [{"title": "Docs", "url": "https://fastapi.tiangolo.com", "content": "FastAPI is fast."}],
         }
-        with patch("app.agent.tools.TavilyClient", return_value=mock_client):
+        with patch("tavily.TavilyClient", return_value=mock_client):
             assert "fastapi.tiangolo.com" in web_search.invoke({"query": "FastAPI", "max_results": 1})
 
     def test_api_failure_raises_tool_error(self):
         from app.agent.tools import web_search
         mock_client = MagicMock()
         mock_client.search.side_effect = Exception("rate limit")
-        with patch("app.agent.tools.TavilyClient", return_value=mock_client):
+        with patch("tavily.TavilyClient", return_value=mock_client):
             with pytest.raises(ToolExecutionError):
                 web_search.invoke({"query": "test", "max_results": 1})
 

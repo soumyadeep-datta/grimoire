@@ -15,7 +15,6 @@ from typing import Annotated
 from langchain_core.tools import tool
 from RestrictedPython import compile_restricted, safe_globals, safe_builtins
 from RestrictedPython.PrintCollector import PrintCollector
-from tavily import TavilyClient
 
 from app.config import get_settings
 from app.exceptions import CollectionNotFoundError, ToolExecutionError
@@ -73,8 +72,10 @@ def web_search(
     Use when local docs don't have the answer or the question needs current info.
     """
     max_results = max(1, min(max_results, 5))
+    settings = get_settings()
     try:
-        client = TavilyClient(api_key=get_settings().tavily_api_key)
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=settings.tavily_api_key)
         response = client.search(
             query=query,
             search_depth="advanced",
@@ -212,4 +213,15 @@ def code_executor(
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
-ALL_TOOLS = [rag_retrieval, web_search, database_query, code_executor]
+def _build_tools() -> list:
+    """Build tool list based on available API keys."""
+    settings = get_settings()
+    tools = [rag_retrieval, database_query, code_executor]
+    if settings.tavily_api_key:
+        tools.insert(1, web_search)
+    else:
+        logger.info("Web search disabled — set TAVILY_API_KEY to enable")
+    return tools
+
+
+ALL_TOOLS = _build_tools()
