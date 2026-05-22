@@ -33,3 +33,4 @@ frontend/dist/
 
 # Docker
 *.log
+qdrant_data/
