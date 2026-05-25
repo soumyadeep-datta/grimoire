@@ -3,13 +3,14 @@ import { useState } from 'react'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { ChatWindow } from '@/components/chat/ChatWindow'
 import { InputBar } from '@/components/chat/InputBar'
+import { ConnectionBanner } from '@/components/layout/ConnectionBanner'
 import { useChat } from '@/hooks/useChat'
 
 export default function Home() {
   const [isDark, setIsDark] = useState(true)
   const {
     messages, sessions, currentSessionId, isStreaming,
-    sendMessage, newSession, switchSession, clearSession,
+    sendMessage, retryMessage, newSession, switchSession, clearSession,
   } = useChat()
 
   return (
@@ -37,8 +38,15 @@ export default function Home() {
         <div style={{
           flex: 1, display: 'flex', flexDirection: 'column',
           background: 'var(--grimoire-void)', overflow: 'hidden',
+          position: 'relative',
         }}>
-          <ChatWindow messages={messages} isDark={isDark} onSendSuggestion={sendMessage} />
+          <ConnectionBanner />
+          <ChatWindow
+            messages={messages}
+            isDark={isDark}
+            onSendSuggestion={sendMessage}
+            onRetry={retryMessage}
+          />
           <InputBar onSend={sendMessage} isStreaming={isStreaming} />
         </div>
       </div>

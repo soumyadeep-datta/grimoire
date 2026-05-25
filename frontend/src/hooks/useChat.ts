@@ -28,6 +28,7 @@ export function useChat() {
       content: '',
       toolStatuses: [],
       streaming: true,
+      originalQuery: question,  // store for retry
     }
 
     setMessages(prev => [...prev, userMsg, assistantMsg])
@@ -103,24 +104,44 @@ export function useChat() {
           setMessages(prev =>
             prev.map(m =>
               m.id === assistantId
-                ? { ...m, content: `Error: ${message}`, streaming: false }
+                ? { ...m, content: message, streaming: false, failed: true }
                 : m
             )
           )
           setIsStreaming(false)
         },
       })
-    } catch {
+    } catch (err) {
+      // Network failure - mark as failed, keep originalQuery for retry
+      const errMsg = err instanceof Error ? err.message : 'Connection failed'
       setMessages(prev =>
         prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: 'Something went wrong. Please try again.', streaming: false }
+            ? {
+                ...m,
+                content: 'Unable to reach the server. Please try again in a moment.',
+                streaming: false,
+                failed: true,
+              }
             : m
         )
       )
       setIsStreaming(false)
     }
   }, [currentSessionId, isStreaming])
+
+  const retryMessage = useCallback((messageId: string) => {
+    const msg = messages.find(m => m.id === messageId)
+    if (!msg || !msg.originalQuery) return
+    // Remove the failed assistant message and its preceding user message
+    setMessages(prev => {
+      const idx = prev.findIndex(m => m.id === messageId)
+      if (idx < 1) return prev
+      return prev.slice(0, idx - 1)
+    })
+    // Resend the original query
+    setTimeout(() => sendMessage(msg.originalQuery!), 50)
+  }, [messages, sendMessage])
 
   const newSession = useCallback(() => {
     setCurrentSessionId(uuidv4())
@@ -157,6 +178,7 @@ export function useChat() {
     currentSessionId,
     isStreaming,
     sendMessage,
+    retryMessage,
     newSession,
     switchSession,
     clearSession,

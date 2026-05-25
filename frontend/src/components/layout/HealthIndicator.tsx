@@ -29,7 +29,7 @@ export function HealthIndicator() {
 
   const config = {
     connected: { color: '#10b981', label: 'Connected', pulse: false },
-    disconnected: { color: '#ef4444', label: 'Backend offline', pulse: false },
+    disconnected: { color: '#ef4444', label: 'Offline', pulse: false },
     checking: { color: '#64748b', label: 'Checking...', pulse: true },
   }[status]
 

@@ -538,6 +538,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         logger.info("Deleted %d chunks for source '%s'", deleted, source)
 
+    @app.get(
+        "/collections/source/content",
+        tags=["RAG"],
+        summary="Get all chunks for a specific source",
+    )
+    async def get_source_content(
+        source: str = Query(description="Source filename to fetch chunks for"),
+    ):
+        """Return all chunks belonging to a specific source document."""
+        store = get_vector_store()
+        chunks = await asyncio.get_running_loop().run_in_executor(
+            None, store.get_chunks_by_source, source
+        )
+        return {"source": source, "chunks": chunks}
+
     return app
 
 

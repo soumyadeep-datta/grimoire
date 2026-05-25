@@ -12,6 +12,8 @@ export interface Message {
   toolStatuses?: ToolStatus[]
   latencyMs?: number
   streaming?: boolean
+  failed?: boolean
+  originalQuery?: string  // for retrying failed messages
 }
 
 export interface Session {

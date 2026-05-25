@@ -307,6 +307,35 @@ class VectorStore:
             logger.error("collection_stats failed: %s", exc)
             return {"total_chunks": 0, "unique_sources": []}
 
+    def get_chunks_by_source(self, source: str) -> list[dict]:
+        """Return all chunks for a specific source, sorted by chunk_index."""
+        from qdrant_client import models
+        try:
+            scroll_result = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=models.Filter(
+                    must=[models.FieldCondition(
+                        key="source", match=models.MatchValue(value=source)
+                    )]
+                ),
+                limit=10000,
+                with_payload=True,
+                with_vectors=False,
+            )
+            chunks = [
+                {
+                    "content": (p.payload or {}).get("content", ""),
+                    "chunk_index": (p.payload or {}).get("chunk_index", 0),
+                    "source": (p.payload or {}).get("source", source),
+                }
+                for p in scroll_result[0]
+            ]
+            chunks.sort(key=lambda c: c["chunk_index"])
+            return chunks
+        except Exception as exc:
+            logger.error("Failed to fetch chunks for source '%s': %s", source, exc)
+            return []
+
     def delete_collection(self) -> None:
         self._client.delete_collection(self._collection)
         self._ensure_collection()

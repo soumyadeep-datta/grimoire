@@ -3,11 +3,12 @@ import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, BookOpen } from 'lucide-react'
+import { Copy, Check, BookOpen, RefreshCw, AlertCircle } from 'lucide-react'
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Message } from '@/lib/types'
 import { ToolTrace } from './ToolTrace'
+import { SourcePreview } from './SourcePreview'
 
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false)
@@ -33,8 +34,17 @@ function CopyButton({ code }: { code: string }) {
   )
 }
 
-export function MessageBubble({ message, isDark }: { message: Message; isDark: boolean }) {
+export function MessageBubble({
+  message,
+  isDark,
+  onRetry,
+}: {
+  message: Message
+  isDark: boolean
+  onRetry?: (messageId: string) => void
+}) {
   const isUser = message.role === 'user'
+  const [selectedSource, setSelectedSource] = useState<string | null>(null)
 
   if (isUser) {
     return (
@@ -81,8 +91,51 @@ export function MessageBubble({ message, isDark }: { message: Message; isDark: b
           <ToolTrace tools={message.toolStatuses} />
         )}
 
+        {/* Failed state with retry button */}
+        {message.failed && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: '10px',
+            padding: '12px 14px', borderRadius: '10px',
+            background: 'rgba(239,68,68,0.06)',
+            border: '1px solid rgba(239,68,68,0.2)',
+            marginBottom: '8px',
+          }}>
+            <AlertCircle size={14} style={{
+              color: '#f87171', flexShrink: 0, marginTop: '2px',
+            }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '13px', color: '#fca5a5', marginBottom: '8px', lineHeight: '1.5' }}>
+                {message.content || 'Something went wrong.'}
+              </div>
+              {onRetry && message.originalQuery && (
+                <button
+                  onClick={() => onRetry(message.id)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '5px',
+                    padding: '5px 10px', borderRadius: '6px',
+                    border: '1px solid rgba(239,68,68,0.3)',
+                    background: 'rgba(239,68,68,0.1)',
+                    color: '#fca5a5',
+                    fontSize: '11px', fontWeight: 500,
+                    cursor: 'pointer', transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(239,68,68,0.18)'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'rgba(239,68,68,0.1)'
+                  }}
+                >
+                  <RefreshCw size={11} />
+                  Retry
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Content */}
-        <div style={{
+        {!message.failed && <div style={{
           fontSize: '14px',
           lineHeight: '1.75',
           color: 'var(--grimoire-text)',
@@ -181,24 +234,42 @@ export function MessageBubble({ message, isDark }: { message: Message; isDark: b
               animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom',
             }} />
           )}
-        </div>
+        </div>}
 
         {/* Sources */}
         {message.sources && message.sources.length > 0 && (
           <div style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             <span style={{ fontSize: '11px', color: 'var(--grimoire-muted)', alignSelf: 'center' }}>Sources:</span>
             {Array.from(new Set(message.sources.map(src => src.split(' (chunk')[0].trim()))).map((src, i) => (
-              <span key={i} style={{
-                padding: '3px 10px', borderRadius: '12px', fontSize: '11px',
-                background: 'rgba(139,92,246,0.08)',
-                border: '1px solid rgba(139,92,246,0.2)',
-                color: 'var(--grimoire-violet-bright)',
-              }}>
+              <button
+                key={i}
+                onClick={() => setSelectedSource(src)}
+                title={`View ${src}`}
+                style={{
+                  padding: '3px 10px', borderRadius: '12px', fontSize: '11px',
+                  background: 'rgba(139,92,246,0.08)',
+                  border: '1px solid rgba(139,92,246,0.2)',
+                  color: 'var(--grimoire-violet-bright)',
+                  cursor: 'pointer', transition: 'all 0.15s',
+                  fontFamily: 'inherit',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'rgba(139,92,246,0.15)'
+                  e.currentTarget.style.borderColor = 'rgba(139,92,246,0.4)'
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'rgba(139,92,246,0.08)'
+                  e.currentTarget.style.borderColor = 'rgba(139,92,246,0.2)'
+                }}
+              >
                 {src}
-              </span>
+              </button>
             ))}
           </div>
         )}
+
+        {/* Source preview modal */}
+        <SourcePreview source={selectedSource} onClose={() => setSelectedSource(null)} />
 
         {/* Latency */}
         {message.latencyMs && !message.streaming && (
