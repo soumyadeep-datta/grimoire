@@ -19,6 +19,7 @@ REQUIRED = [
     ("LangChain Community",   "langchain_community.document_loaders", "TextLoader"),
     ("LangGraph",             "langgraph.prebuilt",              "create_react_agent"),
     ("LangGraph SQLite",      "langgraph.checkpoint.sqlite",     "SqliteSaver"),
+    ("LangGraph Async SQLite","aiosqlite",                        None),
     ("Qdrant Client",         "qdrant_client",                   "QdrantClient"),
     ("BM25S",                 "bm25s",                           "BM25"),
     ("Sentence Transformers", "sentence_transformers",           "SentenceTransformer"),

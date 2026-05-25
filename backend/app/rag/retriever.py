@@ -42,7 +42,6 @@ from app.rag.embeddings import embed_documents, embed_query, get_embedding_clien
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = "grimoire_docs"
 RERANK_MODEL = "rerank-v4.0-fast"
 RRF_K = 60
 CANDIDATE_MULTIPLIER = 4
@@ -94,7 +93,7 @@ class VectorStore:
         self._embedding_dim = dim
 
         self._client = QdrantClient(path=str(settings.qdrant_path))
-        self._collection = COLLECTION_NAME
+        self._collection = settings.qdrant_collection_name
 
         # Optional Cohere reranker
         self._cohere = None
@@ -313,6 +312,38 @@ class VectorStore:
         self._ensure_collection()
         self._refresh_bm25_index()
         logger.info("Collection '%s' wiped and recreated", self._collection)
+
+    def delete_by_source(self, source: str) -> int:
+        """Delete all chunks belonging to a specific source document."""
+        from qdrant_client import models
+        # Count first so we can return how many were deleted
+        try:
+            scroll_result = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=models.Filter(
+                    must=[models.FieldCondition(
+                        key="source", match=models.MatchValue(value=source)
+                    )]
+                ),
+                limit=10000,
+                with_payload=False,
+                with_vectors=False,
+            )
+            point_ids = [p.id for p in scroll_result[0]]
+            count = len(point_ids)
+
+            if count > 0:
+                self._client.delete(
+                    collection_name=self._collection,
+                    points_selector=models.PointIdsList(points=point_ids),
+                )
+                self._refresh_bm25_index()
+
+            logger.info("Deleted %d chunks for source '%s'", count, source)
+            return count
+        except Exception as exc:
+            logger.error("Failed to delete source '%s': %s", source, exc)
+            raise
 
 
 def get_vector_store() -> VectorStore:

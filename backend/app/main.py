@@ -32,7 +32,7 @@ from typing import Annotated
 import uvicorn
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.agent.orchestrator import get_agent
 from app.config import Settings, get_settings
@@ -76,12 +76,14 @@ async def lifespan(app: FastAPI):
     Shifts the cold-start penalty from the first user request to server boot,
     ensuring consistent low-latency responses from the first query onwards.
     """
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
     settings = get_settings()
     logger.info("Grimoire starting up | env=%s", settings.environment)
 
-    # 1. Warm up Voyage AI embedding client
+    # 1. Warm up embedding client — mode locked at startup
+    from app.rag.embeddings import get_embedding_client
     try:
-        from app.rag.embeddings import get_embedding_client
         get_embedding_client()
         logger.info("Embedding client initialized and warmed up.")
     except Exception as exc:
@@ -94,7 +96,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("Vector store warm-up failed: %s", exc)
 
-    yield
+    # 3. Initialize AsyncSqliteSaver for streaming endpoint
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as async_saver:
+        agent = get_agent()
+        agent.set_async_checkpointer(async_saver)
+        logger.info("Async graph initialized for streaming.")
+
+        yield
 
     logger.info("Grimoire shutting down.")
 
@@ -327,6 +335,153 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             latency_ms=round(latency_ms, 2),
         )
 
+    @app.post(
+        "/query/stream",
+        tags=["Agent"],
+        summary="Ask a question with streaming response (SSE)",
+    )
+    async def query_stream(body: QueryRequest):
+        """
+        Stream agent responses via Server-Sent Events.
+
+        Event types:
+            status  — tool execution status updates
+            token   — text tokens as they generate
+            sources — final sources list
+            done    — signals stream complete with latency
+            error   — error message if something fails
+        """
+        async def event_generator():
+            import json
+            import time
+
+            start = time.monotonic()
+            agent = get_agent()
+            config = {"configurable": {"thread_id": body.session_id}}
+            graph = agent.get_async_graph()
+
+            if graph is None:
+                yield f"event: error\ndata: {json.dumps({'message': 'Streaming not available - server still initializing.'})}\n\n"
+                return
+
+            sources: set[str] = set()
+            answer_parts: list[str] = []
+
+            async def _run_stream(g, cfg):
+                async for event in g.astream_events(
+                    {"messages": [{"role": "user", "content": body.question}]},
+                    config=cfg,
+                    version="v2",
+                ):
+                    yield event
+
+            try:
+                async for event in _run_stream(graph, config):
+                    kind = event["event"]
+                    name = event.get("name", "")
+
+                    if kind == "on_tool_start":
+                        tool_name = name
+                        status_msg = {
+                            "rag_retrieval": "Searching documentation...",
+                            "web_search": "Searching the web...",
+                            "database_query": "Querying database...",
+                            "code_executor": "Executing code...",
+                        }.get(tool_name, f"Running {tool_name}...")
+                        yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': status_msg})}\n\n"
+
+                    elif kind == "on_tool_end":
+                        tool_name = name
+                        output = str(event.get("data", {}).get("output", ""))
+                        if tool_name == "rag_retrieval":
+                            for line in output.splitlines():
+                                if "Source:" in line and "Chunk:" in line:
+                                    try:
+                                        src_part = line.split("Source:")[1].split("|")[0].strip()
+                                        chunk_part = line.split("Chunk:")[1].split("|")[0].strip()
+                                        sources.add(f"{src_part} (chunk {chunk_part})")
+                                    except IndexError:
+                                        pass
+                        yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': 'Done', 'done': True})}\n\n"
+
+                    elif kind == "on_chat_model_stream":
+                        chunk = event.get("data", {}).get("chunk")
+                        if chunk and hasattr(chunk, "content") and chunk.content:
+                            content = chunk.content
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get("type") == "text":
+                                        text = block.get("text", "")
+                                        if text:
+                                            answer_parts.append(text)
+                                            yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+                            elif isinstance(content, str) and content:
+                                answer_parts.append(content)
+                                yield f"event: token\ndata: {json.dumps({'text': content})}\n\n"
+
+                latency_ms = round((time.monotonic() - start) * 1000, 2)
+                full_answer = "".join(answer_parts)
+                await asyncio.get_running_loop().run_in_executor(
+                    None, agent.add_to_checkpoint,
+                    body.session_id, body.question, full_answer
+                )
+                yield f"event: sources\ndata: {json.dumps({'sources': sorted(sources)})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'latency_ms': latency_ms})}\n\n"
+
+            except Exception as exc:
+                err = str(exc)
+                if "INVALID_CHAT_HISTORY" in err or "ToolMessage" in err:
+                    logger.warning("Corrupted checkpoint for session '%s' — clearing and retrying", body.session_id)
+                    agent.clear_session(body.session_id)
+                    sources = set()
+                    answer_parts = []
+                    try:
+                        async for event in _run_stream(graph, config):
+                            kind = event["event"]
+                            name = event.get("name", "")
+                            if kind == "on_tool_start":
+                                tool_name = name
+                                status_msg = {"rag_retrieval": "Searching documentation...", "web_search": "Searching the web...", "database_query": "Querying database...", "code_executor": "Executing code..."}.get(tool_name, f"Running {tool_name}...")
+                                yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': status_msg})}\n\n"
+                            elif kind == "on_tool_end":
+                                yield f"event: status\ndata: {json.dumps({'tool': name, 'status': 'Done', 'done': True})}\n\n"
+                            elif kind == "on_chat_model_stream":
+                                chunk = event.get("data", {}).get("chunk")
+                                if chunk and hasattr(chunk, "content") and chunk.content:
+                                    c = chunk.content
+                                    if isinstance(c, list):
+                                        for block in c:
+                                            if isinstance(block, dict) and block.get("type") == "text":
+                                                text = block.get("text", "")
+                                                if text:
+                                                    answer_parts.append(text)
+                                                    yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+                                    elif isinstance(c, str) and c:
+                                        answer_parts.append(c)
+                                        yield f"event: token\ndata: {json.dumps({'text': c})}\n\n"
+                        latency_ms = round((time.monotonic() - start) * 1000, 2)
+                        full_answer = "".join(answer_parts)
+                        await asyncio.get_running_loop().run_in_executor(None, agent.add_to_checkpoint, body.session_id, body.question, full_answer)
+                        yield f"event: done\ndata: {json.dumps({'latency_ms': latency_ms})}\n\n"
+                    except Exception as retry_exc:
+                        yield f"event: error\ndata: {json.dumps({'message': str(retry_exc)})}\n\n"
+                elif "overloaded" in err.lower() or "529" in err:
+                    yield f"event: error\ndata: {json.dumps({'message': 'Anthropic servers temporarily overloaded. Please try again.'})}\n\n"
+                elif "rate" in err.lower() or "429" in err:
+                    yield f"event: error\ndata: {json.dumps({'message': 'Rate limit exceeded. Please wait a moment.'})}\n\n"
+                else:
+                    yield f"event: error\ndata: {json.dumps({'message': f'An error occurred: {err}'})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # disable nginx buffering
+                "Connection": "keep-alive",
+            },
+        )
+
     @app.get(
         "/history",
         response_model=HistoryResponse,
@@ -366,6 +521,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Delete all indexed documents from Qdrant. Irreversible."""
         store = get_vector_store()
         store.delete_collection()
+
+    @app.delete(
+        "/collections/source",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["RAG"],
+        summary="Delete all chunks for a specific source",
+    )
+    async def delete_source(
+        source: str = Query(description="Source filename to delete"),
+    ):
+        """Delete all chunks from a specific source document. Irreversible."""
+        store = get_vector_store()
+        deleted = await asyncio.get_running_loop().run_in_executor(
+            None, store.delete_by_source, source
+        )
+        logger.info("Deleted %d chunks for source '%s'", deleted, source)
 
     return app
 

@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --grimoire-void: #080810;
+    --grimoire-deep: #0d0d1a;
+    --grimoire-surface: #111122;
+    --grimoire-elevated: #161630;
+    --grimoire-border: rgba(139, 92, 246, 0.15);
+    --grimoire-border-hover: rgba(139, 92, 246, 0.35);
+    --grimoire-violet: #8b5cf6;
+    --grimoire-violet-bright: #a78bfa;
+    --grimoire-pink: #ec4899;
+    --grimoire-amber: #f59e0b;
+    --grimoire-text: #e2e8f0;
+    --grimoire-muted: #64748b;
+    --grimoire-faint: #1e1e3a;
+  }
+
+  .light {
+    --grimoire-void: #fafaf9;
+    --grimoire-deep: #f5f5f0;
+    --grimoire-surface: #ffffff;
+    --grimoire-elevated: #fafaf9;
+    --grimoire-border: rgba(109, 40, 217, 0.12);
+    --grimoire-border-hover: rgba(109, 40, 217, 0.28);
+    --grimoire-violet: #7c3aed;
+    --grimoire-violet-bright: #6d28d9;
+    --grimoire-pink: #db2777;
+    --grimoire-amber: #d97706;
+    --grimoire-text: #1e1b4b;
+    --grimoire-muted: #6b7280;
+    --grimoire-faint: #ede9fe;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--grimoire-void);
+    color: var(--grimoire-text);
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--grimoire-border); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--grimoire-border-hover); }
+}

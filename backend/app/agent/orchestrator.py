@@ -63,14 +63,25 @@ class GrimoireAgent:
 
     def __init__(self):
         self._graph = None
-        # Explicit connection — safer than context manager in FastAPI/uvicorn
+        self._async_graph = None
+        # Explicit connection with WAL mode for concurrent read/write safety.
+        # WAL allows readers to access the DB while a writer is committing,
+        # preventing "database is locked" errors during streaming + ingestion.
         self._conn = sqlite3.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")  # wait 5s on locks
+        self._conn.commit()
         self._checkpointer = SqliteSaver(self._conn)
 
-    def _build_graph(self):
+    def set_async_checkpointer(self, async_checkpointer) -> None:
+        """Called from FastAPI lifespan with AsyncSqliteSaver instance."""
+        self._async_graph = self._build_graph(async_checkpointer)
+        logger.info("Async LangGraph agent built for streaming.")
+
+    def _build_graph(self, checkpointer):
         s = get_settings()
 
-        # LangChain 1.x: model= not model_name=, max_tokens= not max_tokens_to_sample=
         llm = ChatAnthropic(
             model=s.claude_model,
             api_key=s.anthropic_api_key,
@@ -83,7 +94,7 @@ class GrimoireAgent:
             model=llm,
             tools=ALL_TOOLS,
             prompt=SYSTEM_PROMPT,
-            checkpointer=self._checkpointer,
+            checkpointer=checkpointer,
         )
 
         logger.info(
@@ -94,8 +105,13 @@ class GrimoireAgent:
 
     def get_graph(self):
         if self._graph is None:
-            self._graph = self._build_graph()
+            self._graph = self._build_graph(self._checkpointer)
         return self._graph
+
+    def get_async_graph(self):
+        if self._async_graph is None:
+            self._async_graph = self._build_graph(self._async_checkpointer)
+        return self._async_graph
 
     def run(self, question: str, session_id: str = "default") -> AgentResponse:
         """

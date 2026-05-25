@@ -1,24 +1,24 @@
 """
-Embedding provider with automatic fallback.
+Embedding provider with startup-locked configuration.
 
-Priority:
-    1. Voyage-code-3.5  — if VOYAGE_API_KEY is set (production, MTEB ~67)
-    2. all-MiniLM-L6-v2 — local fallback, no key needed (MTEB ~56, dim=384)
+Mode is determined ONCE at startup based on VOYAGE_API_KEY availability.
+No runtime switching — eliminates dimension mismatch and silent degradation risks.
 
-The provider is selected once at startup and cached for the process lifetime.
-Switching providers requires wiping the Qdrant collection and re-ingesting,
-since embedding dimensions differ (1024 vs 384).
+Production mode (VOYAGE_API_KEY set):
+    Voyage-code-3.5 (1024-dim) | reranking enabled | full pipeline
+Demo mode (no VOYAGE_API_KEY):
+    all-MiniLM-L6-v2 (384-dim) | no reranking | quick start
 
-Interface is identical regardless of provider:
-    embed_documents(texts) -> List[List[float]]
-    embed_query(text)      -> List[float]
-    EMBEDDING_DIM          -> int
+Rate limit handling (production mode):
+    Voyage calls wrapped with exponential backoff — 1s/2s/4s/8s retries.
+    On exhausted retries, raises RateLimitError (429) — no silent fallback.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, List
 
 from app.config import get_settings
@@ -27,7 +27,47 @@ logger = logging.getLogger(__name__)
 
 _client: Any = None
 _lock = threading.Lock()
-EMBEDDING_DIM: int = 1024  # updated at init time
+EMBEDDING_DIM: int = 1024  # set at init time
+
+# Retry config — mirrors Anthropic SDK defaults
+_MAX_RETRIES = 4
+_BASE_DELAY = 1.0  # seconds
+
+
+def _with_backoff(fn, *args, **kwargs) -> Any:
+    """
+    Call fn with exponential backoff on rate limit errors.
+    Retries up to _MAX_RETRIES times with 1s, 2s, 4s, 8s delays.
+    On exhausted retries, raises RateLimitError — never silently falls back.
+    """
+    delay = _BASE_DELAY
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            err_str = str(exc)
+            is_rate_limit = (
+                "429" in err_str
+                or "rate" in err_str.lower()
+                or "RPM" in err_str
+                or "TPM" in err_str
+            )
+            if is_rate_limit and attempt < _MAX_RETRIES:
+                logger.warning(
+                    "Voyage rate limit hit (attempt %d/%d) — retrying in %.0fs",
+                    attempt + 1, _MAX_RETRIES, delay
+                )
+                time.sleep(delay)
+                delay *= 2
+                continue
+            if is_rate_limit:
+                from app.exceptions import RateLimitError
+                raise RateLimitError(
+                    "Voyage AI rate limit exceeded after retries. "
+                    "Please wait a moment and try again."
+                ) from exc
+            from app.exceptions import UpstreamProviderError
+            raise UpstreamProviderError(f"Voyage AI embedding failed: {exc}") from exc
 
 
 def _init_voyage() -> tuple[Any, int]:
@@ -45,9 +85,9 @@ def _init_local() -> tuple[Any, int]:
     warnings.filterwarnings("ignore", category=UserWarning)
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer("all-MiniLM-L6-v2")
-    dim = model.get_embedding_dimension()
+    dim = model.get_embedding_dimension() or 384
     logger.info(
-        "Embedder: all-MiniLM-L6-v2 | dim=%d | mode=local-fallback "
+        "Embedder: all-MiniLM-L6-v2 | dim=%d | mode=demo "
         "(set VOYAGE_API_KEY for production embeddings)",
         dim
     )
@@ -57,7 +97,7 @@ def _init_local() -> tuple[Any, int]:
 def get_embedding_client() -> Any:
     """
     Return the singleton embedding client (thread-safe, lazy init).
-    Selects Voyage if VOYAGE_API_KEY is set, otherwise local fallback.
+    Mode is locked at first init — never changes during runtime.
     """
     global _client, EMBEDDING_DIM
     if _client is None:
@@ -83,23 +123,14 @@ def embed_documents(texts: List[str]) -> List[List[float]]:
         embeddings: List[List[float]] = []
         for i in range(0, len(texts), 128):
             batch = texts[i: i + 128]
-            try:
-                result = client.embed(batch, model=settings.embedding_model, input_type="document")
-            except Exception as exc:
-                err_str = str(exc)
-                if "429" in err_str or "rate" in err_str.lower():
-                    from app.exceptions import RateLimitError
-                    raise RateLimitError(
-                        "Voyage AI rate limit exceeded. Please wait and try again."
-                    ) from exc
-                from app.exceptions import UpstreamProviderError
-                raise UpstreamProviderError(
-                    f"Voyage AI embedding failed: {exc}"
-                ) from exc
+            result = _with_backoff(
+                client.embed, batch,
+                model=settings.embedding_model,
+                input_type="document"
+            )
             embeddings.extend([list(map(float, e)) for e in result.embeddings])
         return embeddings
     else:
-        # Local SentenceTransformer
         vecs = client.encode(texts, show_progress_bar=False, convert_to_numpy=True)
         return [v.tolist() for v in vecs]
 
@@ -110,17 +141,11 @@ def embed_query(text: str) -> List[float]:
     settings = get_settings()
 
     if provider == "voyage":
-        try:
-            result = client.embed([text], model=settings.embedding_model, input_type="query")
-        except Exception as exc:
-            err_str = str(exc)
-            if "429" in err_str or "rate" in err_str.lower():
-                from app.exceptions import RateLimitError
-                raise RateLimitError(
-                    "Voyage AI rate limit exceeded. Please wait and try again."
-                ) from exc
-            from app.exceptions import UpstreamProviderError
-            raise UpstreamProviderError(f"Voyage AI embedding failed: {exc}") from exc
+        result = _with_backoff(
+            client.embed, [text],
+            model=settings.embedding_model,
+            input_type="query"
+        )
         return list(map(float, result.embeddings[0]))
     else:
         vec = client.encode([text], show_progress_bar=False, convert_to_numpy=True)

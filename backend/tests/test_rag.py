@@ -112,6 +112,7 @@ class TestVectorStore:
             mock_settings.return_value.cohere_api_key = None
             mock_settings.return_value.voyage_api_key = "test"
             mock_settings.return_value.embedding_provider = "voyage"
+            mock_settings.return_value.qdrant_collection_name = "grimoire_docs_voyage"
             store = VectorStore()
             mock_count = MagicMock()
             mock_count.count = 0
@@ -130,6 +131,7 @@ class TestVectorStore:
             mock_settings.return_value.cohere_api_key = None
             mock_settings.return_value.voyage_api_key = "test"
             mock_settings.return_value.embedding_provider = "voyage"
+            mock_settings.return_value.qdrant_collection_name = "grimoire_docs_voyage"
             store = VectorStore()
             result = store.add_documents([])
             assert result == 0
@@ -144,6 +146,7 @@ class TestVectorStore:
             mock_settings.return_value.cohere_api_key = None
             mock_settings.return_value.voyage_api_key = "test"
             mock_settings.return_value.embedding_provider = "voyage"
+            mock_settings.return_value.qdrant_collection_name = "grimoire_docs_voyage"
             store = VectorStore()
             store._client.count = MagicMock(side_effect=Exception("db error"))
             stats = store.collection_stats()

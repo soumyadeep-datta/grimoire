@@ -122,7 +122,16 @@ class Settings(BaseSettings):
 
     @property
     def embedding_provider(self) -> str:
+        """Locked at startup based on VOYAGE_API_KEY availability."""
         return "voyage" if self.voyage_api_key else "local"
+
+    @property
+    def qdrant_collection_name(self) -> str:
+        """
+        Each embedding provider gets its own Qdrant collection.
+        Eliminates dimension mismatch errors when switching providers.
+        """
+        return f"grimoire_docs_{self.embedding_provider}"
 
     @property
     def reranking_enabled(self) -> bool:
