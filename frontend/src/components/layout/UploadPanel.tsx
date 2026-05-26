@@ -3,6 +3,8 @@ import { useState, useRef, DragEvent, ChangeEvent } from 'react'
 import { Upload, FileText, CheckCircle2, AlertCircle, Loader2, X, ChevronDown } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { deleteSource } from '@/lib/api'
+import { useConnection } from '@/lib/connection'
+import { useToast } from '@/lib/toast'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -10,6 +12,7 @@ interface UploadPanelProps {
   totalChunks: number
   uniqueSources?: string[]
   onIngestComplete: () => void
+  onIngestingChange?: (ingesting: boolean) => void
 }
 
 type UploadStatus =
@@ -18,22 +21,33 @@ type UploadStatus =
   | { state: 'success'; fileName: string; chunks: number }
   | { state: 'error'; message: string }
 
-export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete }: UploadPanelProps) {
+export function UploadPanel({
+  totalChunks,
+  uniqueSources = [],
+  onIngestComplete,
+  onIngestingChange,
+}: UploadPanelProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [status, setStatus] = useState<UploadStatus>({ state: 'idle' })
   const [expanded, setExpanded] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { isOnline } = useConnection()
+  const { show } = useToast()
 
   const handleDelete = async (source: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (deleting) return
+    if (!isOnline) {
+      show("Can't delete while offline — reconnect to continue", 'error')
+      return
+    }
     setDeleting(source)
     try {
       await deleteSource(source)
-      onIngestComplete() // refreshes the list
+      onIngestComplete()
     } catch {
-      // ignore - the list will refresh anyway
+      show('Delete failed — please try again', 'error')
     } finally {
       setDeleting(null)
     }
@@ -42,14 +56,19 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
+    if (!isOnline) {
+      show("Can't upload while offline — reconnect to continue", 'error')
+      return
+    }
+
     const file = files[0]
     setStatus({ state: 'uploading', fileName: file.name })
+    onIngestingChange?.(true)
 
     const formData = new FormData()
     formData.append('file', file)
 
     try {
-      // 5 minute timeout for large files
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000)
 
@@ -73,13 +92,13 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
         chunks: data.chunks_added ?? 0,
       })
       onIngestComplete()
-
-      // Auto-clear success after 3 seconds
       setTimeout(() => setStatus({ state: 'idle' }), 3000)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Upload failed'
       setStatus({ state: 'error', message: msg })
       setTimeout(() => setStatus({ state: 'idle' }), 5000)
+    } finally {
+      onIngestingChange?.(false)
     }
   }
 
@@ -104,64 +123,89 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
   const isUploading = status.state === 'uploading'
 
   return (
-    <div style={{ padding: '12px 12px 0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+    <div style={{
+      padding: '16px 14px 0',
+      display: 'flex', flexDirection: 'column', gap: '10px',
+    }}>
+      {/* Drop zone — warm dashed border */}
       <div
         onClick={() => !isUploading && inputRef.current?.click()}
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         style={{
-          padding: '14px 12px',
-          borderRadius: '10px',
-          border: `1.5px dashed ${
+          padding: '18px 12px',
+          borderRadius: 'var(--grimoire-radius)',
+          border: `1px dashed ${
             isDragging
-              ? 'var(--grimoire-violet)'
-              : isUploading
-                ? 'var(--grimoire-border-hover)'
-                : 'var(--grimoire-border)'
+              ? 'var(--grimoire-gold)'
+              : 'rgba(201, 177, 135, 0.22)'
           }`,
           background: isDragging
-            ? 'rgba(139,92,246,0.08)'
-            : 'rgba(139,92,246,0.02)',
+            ? 'rgba(201, 177, 135, 0.06)'
+            : 'rgba(201, 177, 135, 0.02)',
           cursor: isUploading ? 'not-allowed' : 'pointer',
-          transition: 'all 0.2s',
+          transition: 'var(--grimoire-transition)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          gap: '6px',
+          gap: '8px',
           textAlign: 'center',
         }}
         onMouseEnter={e => {
           if (!isUploading && !isDragging) {
-            e.currentTarget.style.borderColor = 'var(--grimoire-border-hover)'
-            e.currentTarget.style.background = 'rgba(139,92,246,0.05)'
+            e.currentTarget.style.borderColor = 'rgba(201, 177, 135, 0.4)'
+            e.currentTarget.style.background = 'rgba(201, 177, 135, 0.04)'
           }
         }}
         onMouseLeave={e => {
           if (!isUploading && !isDragging) {
-            e.currentTarget.style.borderColor = 'var(--grimoire-border)'
-            e.currentTarget.style.background = 'rgba(139,92,246,0.02)'
+            e.currentTarget.style.borderColor = 'rgba(201, 177, 135, 0.22)'
+            e.currentTarget.style.background = 'rgba(201, 177, 135, 0.02)'
           }
         }}
       >
         {isUploading
-          ? <Loader2 size={18} className="animate-spin" style={{ color: 'var(--grimoire-violet)' }} />
-          : <Upload size={18} style={{ color: isDragging ? 'var(--grimoire-violet)' : 'var(--grimoire-muted)' }} />
+          ? (
+            <Loader2
+              size={20}
+              className="animate-spin"
+              style={{ color: 'var(--grimoire-gold)' }}
+            />
+          )
+          : (
+            <Upload
+              size={20}
+              strokeWidth={1.5}
+              style={{
+                color: isDragging
+                  ? 'var(--grimoire-gold-bright)'
+                  : 'var(--grimoire-muted)',
+              }}
+            />
+          )
         }
-        <span style={{
-          fontSize: '12px',
-          color: isDragging ? 'var(--grimoire-violet-bright)' : 'var(--grimoire-muted)',
+        <div style={{
+          fontSize: '12.5px',
           fontWeight: 500,
+          letterSpacing: '-0.1px',
+          color: isDragging
+            ? 'var(--grimoire-gold-soft)'
+            : 'var(--grimoire-text-soft)',
         }}>
           {isUploading
-            ? 'Ingesting...'
+            ? 'Indexing...'
             : isDragging
               ? 'Drop to ingest'
               : 'Drop file or click'}
-        </span>
-        <span style={{ fontSize: '10px', color: 'var(--grimoire-muted)' }}>
-          .md .txt .py .js .ts .pdf .html
-        </span>
+        </div>
+        <div style={{
+          fontSize: '10.5px',
+          color: 'var(--grimoire-muted-2)',
+          letterSpacing: '0.2px',
+        }}>
+          md · py · pdf · ts · txt · html
+        </div>
         <input
           ref={inputRef}
           type="file"
@@ -179,16 +223,22 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.38, ease: [0.4, 0, 0.2, 1] }}
             style={{
-              padding: '6px 10px', borderRadius: '6px',
-              background: 'rgba(34,197,94,0.08)',
-              border: '1px solid rgba(34,197,94,0.2)',
-              fontSize: '11px', color: '#86efac',
-              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '7px 11px',
+              borderRadius: 'var(--grimoire-radius-sm)',
+              background: 'rgba(132, 169, 140, 0.08)',
+              border: '1px solid rgba(132, 169, 140, 0.2)',
+              fontSize: '11px',
+              color: 'var(--grimoire-success)',
+              display: 'flex', alignItems: 'center', gap: '7px',
+              letterSpacing: '-0.1px',
             }}
           >
-            <CheckCircle2 size={11} style={{ flexShrink: 0 }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <CheckCircle2 size={11} style={{ flexShrink: 0 }} strokeWidth={2} />
+            <span style={{
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
               Indexed {status.fileName}
             </span>
           </motion.div>
@@ -199,15 +249,19 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.38, ease: [0.4, 0, 0.2, 1] }}
             style={{
-              padding: '6px 10px', borderRadius: '6px',
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.2)',
-              fontSize: '11px', color: '#fca5a5',
-              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '7px 11px',
+              borderRadius: 'var(--grimoire-radius-sm)',
+              background: 'rgba(200, 123, 123, 0.08)',
+              border: '1px solid rgba(200, 123, 123, 0.2)',
+              fontSize: '11px',
+              color: 'var(--grimoire-error)',
+              display: 'flex', alignItems: 'center', gap: '7px',
+              letterSpacing: '-0.1px',
             }}
           >
-            <AlertCircle size={11} style={{ flexShrink: 0 }} />
+            <AlertCircle size={11} style={{ flexShrink: 0 }} strokeWidth={2} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {status.message}
             </span>
@@ -215,29 +269,35 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
         )}
       </AnimatePresence>
 
-      {/* Collection stats — expandable list */}
+      {/* Documents list — expandable */}
       {uniqueSources.length > 0 ? (
         <div>
           <button
             onClick={() => setExpanded(e => !e)}
             style={{
               width: '100%',
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 10px', fontSize: '11px',
+              display: 'flex', alignItems: 'center', gap: '7px',
+              padding: '7px 10px',
+              fontSize: '11px',
               color: 'var(--grimoire-muted)',
               background: 'transparent', border: 'none',
               cursor: 'pointer', textAlign: 'left',
-              transition: 'color 0.15s',
+              transition: 'color var(--grimoire-transition-fast)',
+              fontFamily: 'inherit',
+              letterSpacing: '-0.1px',
             }}
-            onMouseEnter={e => { e.currentTarget.style.color = 'var(--grimoire-text)' }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'var(--grimoire-text-soft)' }}
             onMouseLeave={e => { e.currentTarget.style.color = 'var(--grimoire-muted)' }}
           >
-            <FileText size={11} />
+            <FileText size={11} strokeWidth={1.8} />
             <span style={{ flex: 1 }}>
               {uniqueSources.length} document{uniqueSources.length > 1 ? 's' : ''} indexed
             </span>
-            <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
-              <ChevronDown size={10} />
+            <motion.div
+              animate={{ rotate: expanded ? 180 : 0 }}
+              transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+            >
+              <ChevronDown size={10} strokeWidth={1.8} />
             </motion.div>
           </button>
 
@@ -247,57 +307,81 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
+                transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
                 style={{ overflow: 'hidden' }}
               >
                 <div style={{
-                  display: 'flex', flexDirection: 'column', gap: '2px',
-                  paddingLeft: '10px', paddingRight: '4px', marginTop: '2px',
+                  display: 'flex', flexDirection: 'column', gap: '3px',
+                  paddingLeft: '8px', paddingRight: '2px', marginTop: '4px',
                 }}>
-                  {uniqueSources.map(source => (
-                    <div
-                      key={source}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '6px',
-                        padding: '5px 8px', borderRadius: '6px',
-                        background: 'rgba(139,92,246,0.04)',
-                        fontSize: '11px', color: 'var(--grimoire-muted)',
-                        transition: 'all 0.15s',
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)' }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.04)' }}
-                    >
-                      <FileText size={9} style={{ flexShrink: 0 }} />
-                      <span style={{
-                        flex: 1, overflow: 'hidden',
-                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}
-                        title={source}
-                      >
-                        {source}
-                      </span>
-                      <button
-                        onClick={e => handleDelete(source, e)}
-                        disabled={deleting === source}
-                        title={`Delete ${source}`}
+                  {uniqueSources.map((source, i) => {
+                    // Alternate between gold and sage dot colors for variety
+                    const dotColor = i % 2 === 0
+                      ? 'var(--grimoire-gold)'
+                      : 'var(--grimoire-sage)'
+                    return (
+                      <div
+                        key={source}
                         style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          width: '16px', height: '16px', borderRadius: '4px',
-                          border: 'none', background: 'transparent',
-                          color: 'var(--grimoire-muted)', cursor: 'pointer',
-                          flexShrink: 0, transition: 'all 0.15s',
-                          opacity: deleting === source ? 0.5 : 1,
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '6px 10px',
+                          borderRadius: '7px',
+                          background: 'rgba(201, 177, 135, 0.03)',
+                          fontSize: '11.5px',
+                          color: 'var(--grimoire-text-soft)',
+                          transition: 'var(--grimoire-transition-fast)',
+                          letterSpacing: '-0.1px',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.color = '#f87171' }}
-                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--grimoire-muted)' }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.background = 'rgba(201, 177, 135, 0.07)'
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'rgba(201, 177, 135, 0.03)'
+                        }}
                       >
-                        {deleting === source
-                          ? <Loader2 size={9} className="animate-spin" />
-                          : <X size={9} />
-                        }
-                      </button>
-                    </div>
-                  ))}
+                        <span style={{
+                          width: '5px', height: '5px',
+                          borderRadius: '50%',
+                          background: dotColor,
+                          flexShrink: 0,
+                        }} />
+                        <span style={{
+                          flex: 1, overflow: 'hidden',
+                          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }} title={source}>
+                          {source}
+                        </span>
+                        <button
+                          onClick={e => handleDelete(source, e)}
+                          disabled={deleting === source}
+                          title={`Delete ${source}`}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            width: '18px', height: '18px',
+                            borderRadius: '4px',
+                            border: 'none', background: 'transparent',
+                            color: 'var(--grimoire-muted-2)',
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                            transition: 'var(--grimoire-transition-fast)',
+                            opacity: deleting === source ? 0.5 : 1,
+                            fontFamily: 'inherit',
+                          }}
+                          onMouseEnter={e => {
+                            e.currentTarget.style.color = 'var(--grimoire-error)'
+                          }}
+                          onMouseLeave={e => {
+                            e.currentTarget.style.color = 'var(--grimoire-muted-2)'
+                          }}
+                        >
+                          {deleting === source
+                            ? <Loader2 size={10} className="animate-spin" />
+                            : <X size={10} strokeWidth={2} />
+                          }
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               </motion.div>
             )}
@@ -305,11 +389,13 @@ export function UploadPanel({ totalChunks, uniqueSources = [], onIngestComplete 
         </div>
       ) : (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '6px',
-          padding: '6px 10px', fontSize: '11px',
-          color: 'var(--grimoire-muted)',
+          display: 'flex', alignItems: 'center', gap: '7px',
+          padding: '7px 10px',
+          fontSize: '11px',
+          color: 'var(--grimoire-muted-2)',
+          letterSpacing: '-0.1px',
         }}>
-          <FileText size={11} />
+          <FileText size={11} strokeWidth={1.8} />
           <span>No documents yet</span>
         </div>
       )}

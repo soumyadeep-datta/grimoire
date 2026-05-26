@@ -1,50 +1,195 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@layer base {
-  :root {
-    --grimoire-void: #080810;
-    --grimoire-deep: #0d0d1a;
-    --grimoire-surface: #111122;
-    --grimoire-elevated: #161630;
-    --grimoire-border: rgba(139, 92, 246, 0.15);
-    --grimoire-border-hover: rgba(139, 92, 246, 0.35);
-    --grimoire-violet: #8b5cf6;
-    --grimoire-violet-bright: #a78bfa;
-    --grimoire-pink: #ec4899;
-    --grimoire-amber: #f59e0b;
-    --grimoire-text: #e2e8f0;
-    --grimoire-muted: #64748b;
-    --grimoire-faint: #1e1e3a;
+:root {
+  /* --- BASE — warm undertone, not cool slate ----------------------------- */
+  --grimoire-void: #100c08;          /* deepest base — warm coffee-black */
+  --grimoire-surface: #1a1410;        /* one layer up */
+  --grimoire-surface-2: #221a14;      /* card / panel surface */
+  --grimoire-faint: rgba(255,245,225,0.025);
+  --grimoire-faint-2: rgba(255,245,225,0.05);
+
+  /* --- TEXT — warm cream ------------------------------------------------- */
+  --grimoire-text: #ebe7df;           /* primary body */
+  --grimoire-text-strong: #f0ece4;    /* headers */
+  --grimoire-text-soft: rgba(235,231,223,0.7);
+  --grimoire-muted: rgba(235,231,223,0.5);
+  --grimoire-muted-2: rgba(235,231,223,0.35);
+  --grimoire-faint-text: rgba(235,231,223,0.28);
+
+  /* --- BORDERS — barely there ------------------------------------------- */
+  --grimoire-border: rgba(255,250,235,0.05);
+  --grimoire-border-hover: rgba(255,250,235,0.1);
+  --grimoire-border-strong: rgba(255,250,235,0.15);
+
+  /* --- SIGNATURE PALETTE — champagne / sage / terracotta ---------------- */
+  --grimoire-gold: #c9b187;           /* muted champagne — primary accent */
+  --grimoire-gold-bright: #d4c195;    /* brighter for hover/active */
+  --grimoire-gold-soft: #e8dec6;      /* highlight tint */
+  --grimoire-gold-deep: #a08967;      /* darker for shadow / depth */
+
+  --grimoire-sage: #8a9d7d;           /* warm sage — secondary accent */
+  --grimoire-sage-bright: #b8c4a8;    /* lighter sage for inline accents */
+
+  --grimoire-terracotta: #a56648;     /* dusty terracotta — tertiary, used sparingly */
+
+  /* --- STATE — kept warm even in error ---------------------------------- */
+  --grimoire-success: #84a98c;        /* warm sage-green for success */
+  --grimoire-warning: #d4a574;        /* amber-tan */
+  --grimoire-error: #c87b7b;          /* dusty rose — not harsh red */
+
+  /* --- TRANSITION TIMINGS — slow and deliberate ------------------------ */
+  --grimoire-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --grimoire-ease-slow: cubic-bezier(0.4, 0, 0.6, 1);
+  --grimoire-transition-fast: 240ms var(--grimoire-ease);
+  --grimoire-transition: 380ms var(--grimoire-ease);
+  --grimoire-transition-slow: 560ms var(--grimoire-ease-slow);
+
+  /* --- RADIUS — generous, rounded ---------------------------------------- */
+  --grimoire-radius-sm: 8px;
+  --grimoire-radius: 12px;
+  --grimoire-radius-lg: 16px;
+  --grimoire-radius-xl: 20px;
+
+  /* --- SHADOWS — soft and warm ------------------------------------------ */
+  --grimoire-shadow-glow: 0 4px 20px rgba(201, 177, 135, 0.18);
+  --grimoire-shadow-glow-strong: 0 8px 32px rgba(201, 177, 135, 0.25);
+  --grimoire-shadow-depth: 0 12px 40px rgba(0, 0, 0, 0.4);
+  --grimoire-shadow-inset: inset 0 1px 0 rgba(255, 250, 235, 0.04);
+}
+
+/* =========================================================================
+   AURORA — animated background drift
+   ========================================================================= */
+@keyframes grimoire-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.5; }
+  50% { transform: translate(60px, 50px) scale(1.1); opacity: 0.7; }
+}
+@keyframes grimoire-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.35; }
+  50% { transform: translate(-50px, -40px) scale(1.15); opacity: 0.5; }
+}
+@keyframes grimoire-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.3; }
+  50% { transform: translate(40px, -30px) scale(0.95); opacity: 0.45; }
+}
+
+/* =========================================================================
+   PULSES — slow heartbeats, never frantic
+   ========================================================================= */
+@keyframes grimoire-pulse-slow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(201, 177, 135, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(201, 177, 135, 0); }
+}
+
+@keyframes grimoire-breathe {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+
+@keyframes grimoire-breathe-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 16px rgba(201, 177, 135, 0.18));
+    transform: scale(1);
   }
-
-  .light {
-    --grimoire-void: #fafaf9;
-    --grimoire-deep: #f5f5f0;
-    --grimoire-surface: #ffffff;
-    --grimoire-elevated: #fafaf9;
-    --grimoire-border: rgba(109, 40, 217, 0.12);
-    --grimoire-border-hover: rgba(109, 40, 217, 0.28);
-    --grimoire-violet: #7c3aed;
-    --grimoire-violet-bright: #6d28d9;
-    --grimoire-pink: #db2777;
-    --grimoire-amber: #d97706;
-    --grimoire-text: #1e1b4b;
-    --grimoire-muted: #6b7280;
-    --grimoire-faint: #ede9fe;
+  50% {
+    filter: drop-shadow(0 0 32px rgba(201, 177, 135, 0.38));
+    transform: scale(1.015);
   }
+}
 
-  * { box-sizing: border-box; }
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
 
-  body {
-    background: var(--grimoire-void);
-    color: var(--grimoire-text);
-    margin: 0;
-    height: 100vh;
-    overflow: hidden;
-  }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--grimoire-border); border-radius: 2px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--grimoire-border-hover); }
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* =========================================================================
+   BASE STYLES
+   ========================================================================= */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--grimoire-void);
+  color: var(--grimoire-text);
+  font-family: -apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.1px;
+}
+
+/* Subtle warm film grain — applied to body so it covers everything */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* Cinematic vignette — corners darken slightly, draws eye to center */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.35) 100%);
+}
+
+/* =========================================================================
+   SCROLLBAR — minimal, warm
+   ========================================================================= */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,250,235,0.06);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201,177,135,0.18);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* =========================================================================
+   SELECTION
+   ========================================================================= */
+::selection {
+  background: rgba(201, 177, 135, 0.25);
+  color: var(--grimoire-text-strong);
+}
+
+/* =========================================================================
+   FOCUS — subtle warm ring
+   ========================================================================= */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(201, 177, 135, 0.4);
+  outline-offset: 2px;
+  border-radius: var(--grimoire-radius-sm);
 }

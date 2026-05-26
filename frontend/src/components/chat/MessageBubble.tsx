@@ -2,13 +2,13 @@
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Copy, Check, BookOpen, RefreshCw, AlertCircle } from 'lucide-react'
+import { Copy, Check, RefreshCw, AlertCircle } from 'lucide-react'
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Message } from '@/lib/types'
 import { ToolTrace } from './ToolTrace'
 import { SourcePreview } from './SourcePreview'
+import { GrimoireMark } from '@/components/icons/GrimoireMark'
 
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false)
@@ -20,15 +20,20 @@ function CopyButton({ code }: { code: string }) {
         setTimeout(() => setCopied(false), 2000)
       }}
       style={{
-        display: 'flex', alignItems: 'center', gap: '4px',
-        padding: '3px 8px', borderRadius: '6px',
-        border: '1px solid rgba(139,92,246,0.2)',
-        background: 'rgba(139,92,246,0.08)',
-        color: copied ? '#a78bfa' : '#64748b',
-        fontSize: '11px', cursor: 'pointer', transition: 'all 0.15s',
+        display: 'flex', alignItems: 'center', gap: '5px',
+        padding: '4px 9px',
+        borderRadius: '6px',
+        border: '1px solid rgba(201, 177, 135, 0.18)',
+        background: 'rgba(201, 177, 135, 0.06)',
+        color: copied ? 'var(--grimoire-gold-bright)' : 'var(--grimoire-muted)',
+        fontSize: '11px',
+        cursor: 'pointer',
+        transition: 'var(--grimoire-transition-fast)',
+        fontFamily: 'inherit',
+        letterSpacing: '-0.1px',
       }}
     >
-      {copied ? <Check size={11} /> : <Copy size={11} />}
+      {copied ? <Check size={11} strokeWidth={2} /> : <Copy size={11} strokeWidth={1.8} />}
       {copied ? 'Copied' : 'Copy'}
     </button>
   )
@@ -36,32 +41,39 @@ function CopyButton({ code }: { code: string }) {
 
 export function MessageBubble({
   message,
-  isDark,
   onRetry,
 }: {
   message: Message
-  isDark: boolean
   onRetry?: (messageId: string) => void
 }) {
   const isUser = message.role === 'user'
   const [selectedSource, setSelectedSource] = useState<string | null>(null)
 
+  // ===== USER MESSAGE =====
   if (isUser) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}
+        transition={{ duration: 0.38, ease: [0.4, 0, 0.2, 1] }}
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          marginBottom: '28px',
+        }}
       >
         <div style={{
-          maxWidth: '75%',
-          padding: '12px 16px',
-          borderRadius: '18px 18px 4px 18px',
-          background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-          color: '#fff',
+          maxWidth: '68%',
+          padding: '13px 18px',
+          borderRadius: '20px 20px 4px 20px',
+          background: 'linear-gradient(135deg, rgba(201,177,135,0.12) 0%, rgba(138,157,125,0.08) 100%)',
+          border: '1px solid rgba(201,177,135,0.15)',
+          color: 'var(--grimoire-gold-soft)',
           fontSize: '14px',
           lineHeight: '1.6',
-          boxShadow: '0 4px 20px rgba(139,92,246,0.25)',
+          letterSpacing: '-0.1px',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
         }}>
           {message.content}
         </div>
@@ -69,24 +81,41 @@ export function MessageBubble({
     )
   }
 
+  // ===== ASSISTANT MESSAGE =====
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      style={{ display: 'flex', gap: '12px', marginBottom: '24px', alignItems: 'flex-start' }}
+      transition={{ duration: 0.38, ease: [0.4, 0, 0.2, 1] }}
+      style={{
+        display: 'flex',
+        gap: '18px',
+        marginBottom: '32px',
+        alignItems: 'flex-start',
+      }}
     >
-      {/* Avatar */}
+      {/* Avatar — gold/sage gradient tile with GrimoireMark */}
       <div style={{
-        width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
-        background: 'linear-gradient(135deg, #8b5cf6, #ec4899)',
+        width: '38px', height: '38px',
+        borderRadius: '11px',
+        flexShrink: 0,
+        background: 'linear-gradient(135deg, var(--grimoire-gold) 0%, var(--grimoire-gold-deep) 50%, #6b5840 100%)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginTop: '2px',
+        position: 'relative',
+        overflow: 'hidden',
+        boxShadow: '0 6px 20px rgba(201, 177, 135, 0.2), 0 0 0 1px rgba(255,250,235,0.06)',
       }}>
-        <BookOpen size={13} color="#fff" />
+        {/* Subtle inner highlight */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'radial-gradient(circle at 30% 30%, rgba(255,250,235,0.35), transparent 55%)',
+        }} />
+        <GrimoireMark size={22} style={{ position: 'relative' }} />
       </div>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* Tool trace */}
+      <div style={{ flex: 1, minWidth: 0, paddingTop: '6px' }}>
+        {/* Tool trace pill */}
         {message.toolStatuses && message.toolStatuses.length > 0 && (
           <ToolTrace tools={message.toolStatuses} />
         )}
@@ -94,39 +123,61 @@ export function MessageBubble({
         {/* Failed state with retry button */}
         {message.failed && (
           <div style={{
-            display: 'flex', alignItems: 'flex-start', gap: '10px',
-            padding: '12px 14px', borderRadius: '10px',
-            background: 'rgba(239,68,68,0.06)',
-            border: '1px solid rgba(239,68,68,0.2)',
-            marginBottom: '8px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '11px',
+            padding: '13px 16px',
+            borderRadius: 'var(--grimoire-radius)',
+            background: 'rgba(200, 123, 123, 0.06)',
+            border: '1px solid rgba(200, 123, 123, 0.2)',
+            marginBottom: '10px',
           }}>
-            <AlertCircle size={14} style={{
-              color: '#f87171', flexShrink: 0, marginTop: '2px',
-            }} />
+            <AlertCircle
+              size={14}
+              strokeWidth={1.8}
+              style={{
+                color: 'var(--grimoire-error)',
+                flexShrink: 0,
+                marginTop: '2px',
+              }}
+            />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '13px', color: '#fca5a5', marginBottom: '8px', lineHeight: '1.5' }}>
+              <div style={{
+                fontSize: '13px',
+                color: 'var(--grimoire-error)',
+                marginBottom: '10px',
+                lineHeight: '1.6',
+                letterSpacing: '-0.1px',
+              }}>
                 {message.content || 'Something went wrong.'}
               </div>
               {onRetry && message.originalQuery && (
                 <button
                   onClick={() => onRetry(message.id)}
                   style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '5px',
-                    padding: '5px 10px', borderRadius: '6px',
-                    border: '1px solid rgba(239,68,68,0.3)',
-                    background: 'rgba(239,68,68,0.1)',
-                    color: '#fca5a5',
-                    fontSize: '11px', fontWeight: 500,
-                    cursor: 'pointer', transition: 'all 0.15s',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    borderRadius: '7px',
+                    border: '1px solid rgba(200, 123, 123, 0.3)',
+                    background: 'rgba(200, 123, 123, 0.1)',
+                    color: 'var(--grimoire-error)',
+                    fontSize: '11.5px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    transition: 'var(--grimoire-transition-fast)',
+                    fontFamily: 'inherit',
+                    letterSpacing: '-0.1px',
                   }}
                   onMouseEnter={e => {
-                    e.currentTarget.style.background = 'rgba(239,68,68,0.18)'
+                    e.currentTarget.style.background = 'rgba(200, 123, 123, 0.18)'
                   }}
                   onMouseLeave={e => {
-                    e.currentTarget.style.background = 'rgba(239,68,68,0.1)'
+                    e.currentTarget.style.background = 'rgba(200, 123, 123, 0.1)'
                   }}
                 >
-                  <RefreshCw size={11} />
+                  <RefreshCw size={11} strokeWidth={1.8} />
                   Retry
                 </button>
               )}
@@ -134,148 +185,267 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Content */}
-        {!message.failed && <div style={{
-          fontSize: '14px',
-          lineHeight: '1.75',
-          color: 'var(--grimoire-text)',
-        }}>
-          <ReactMarkdown
-            components={{
-              code({ node, className, children, ...props }: any) {
-                const match = /language-(\w+)/.exec(className || '')
-                const code = String(children).replace(/\n$/, '')
-                const isInline = !match && !String(children).includes('\n')
+        {/* Content — markdown body */}
+        {!message.failed && (
+          <div style={{
+            fontSize: '14.5px',
+            lineHeight: '1.85',
+            color: 'var(--grimoire-text)',
+            letterSpacing: '-0.1px',
+          }}>
+            <ReactMarkdown
+              components={{
+                code({ node, className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '')
+                  const code = String(children).replace(/\n$/, '')
+                  const isInline = !match && !String(children).includes('\n')
 
-                if (isInline) {
+                  if (isInline) {
+                    return (
+                      <code style={{
+                        background: 'rgba(201, 177, 135, 0.12)',
+                        color: 'var(--grimoire-gold-bright)',
+                        padding: '2px 7px',
+                        borderRadius: '5px',
+                        fontSize: '12.5px',
+                        fontFamily: 'SF Mono, monospace',
+                      }} {...props}>
+                        {children}
+                      </code>
+                    )
+                  }
+
                   return (
-                    <code style={{
-                      background: 'rgba(139,92,246,0.12)',
-                      color: '#a78bfa',
-                      padding: '1px 6px',
-                      borderRadius: '4px',
-                      fontSize: '12.5px',
-                      fontFamily: 'monospace',
-                    }} {...props}>
-                      {children}
-                    </code>
-                  )
-                }
-
-                return (
-                  <div style={{
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: '1px solid var(--grimoire-border)',
-                    margin: '12px 0',
-                  }}>
                     <div style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      padding: '6px 12px',
-                      background: 'rgba(139,92,246,0.06)',
-                      borderBottom: '1px solid var(--grimoire-border)',
+                      borderRadius: 'var(--grimoire-radius)',
+                      overflow: 'hidden',
+                      border: '1px solid var(--grimoire-border)',
+                      margin: '14px 0',
                     }}>
-                      <span style={{ fontSize: '11px', color: 'var(--grimoire-muted)', fontFamily: 'monospace' }}>
-                        {match?.[1] ?? 'code'}
-                      </span>
-                      <CopyButton code={code} />
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '7px 14px',
+                        background: 'rgba(201, 177, 135, 0.04)',
+                        borderBottom: '1px solid var(--grimoire-border)',
+                      }}>
+                        <span style={{
+                          fontSize: '11px',
+                          color: 'var(--grimoire-muted)',
+                          fontFamily: 'SF Mono, monospace',
+                          letterSpacing: '0.3px',
+                        }}>
+                          {match?.[1] ?? 'code'}
+                        </span>
+                        <CopyButton code={code} />
+                      </div>
+                      <SyntaxHighlighter
+                        style={oneDark}
+                        language={match?.[1] ?? 'text'}
+                        PreTag="div"
+                        customStyle={{
+                          margin: 0,
+                          padding: '14px 16px',
+                          background: '#0a0c0e',
+                          fontSize: '12.5px',
+                          lineHeight: '1.6',
+                        }}
+                      >
+                        {code}
+                      </SyntaxHighlighter>
                     </div>
-                    <SyntaxHighlighter
-                      style={isDark ? oneDark : oneLight}
-                      language={match?.[1] ?? 'text'}
-                      PreTag="div"
-                      customStyle={{
-                        margin: 0, padding: '14px 16px',
-                        background: isDark ? '#0d0d1a' : '#fafaf9',
-                        fontSize: '12.5px', lineHeight: '1.6',
-                      }}
-                    >
-                      {code}
-                    </SyntaxHighlighter>
+                  )
+                },
+                p: ({ children }) => (
+                  <p style={{ margin: '0 0 12px', lineHeight: '1.85' }}>{children}</p>
+                ),
+                ul: ({ children }) => (
+                  <ul style={{ margin: '8px 0', paddingLeft: '22px' }}>{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol style={{ margin: '8px 0', paddingLeft: '22px' }}>{children}</ol>
+                ),
+                li: ({ children }) => (
+                  <li style={{ margin: '4px 0', lineHeight: '1.75' }}>{children}</li>
+                ),
+                h1: ({ children }) => (
+                  <h1 style={{
+                    fontSize: '18px', fontWeight: 600,
+                    margin: '18px 0 10px',
+                    color: 'var(--grimoire-gold-soft)',
+                    letterSpacing: '-0.3px',
+                  }}>{children}</h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 style={{
+                    fontSize: '16px', fontWeight: 600,
+                    margin: '16px 0 8px',
+                    color: 'var(--grimoire-gold-soft)',
+                    letterSpacing: '-0.2px',
+                  }}>{children}</h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 style={{
+                    fontSize: '14.5px', fontWeight: 600,
+                    margin: '14px 0 6px',
+                    color: 'var(--grimoire-text-strong)',
+                  }}>{children}</h3>
+                ),
+                strong: ({ children }) => (
+                  <strong style={{
+                    fontWeight: 600,
+                    color: 'var(--grimoire-text-strong)',
+                  }}>{children}</strong>
+                ),
+                em: ({ children }) => (
+                  <em style={{
+                    fontStyle: 'normal',
+                    color: 'var(--grimoire-sage-bright)',
+                  }}>{children}</em>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote style={{
+                    borderLeft: '2px solid var(--grimoire-gold)',
+                    paddingLeft: '14px',
+                    margin: '12px 0',
+                    color: 'var(--grimoire-muted)',
+                    fontStyle: 'italic',
+                  }}>{children}</blockquote>
+                ),
+                table: ({ children }) => (
+                  <div style={{ overflowX: 'auto', margin: '14px 0' }}>
+                    <table style={{
+                      borderCollapse: 'collapse',
+                      width: '100%',
+                      fontSize: '13px',
+                    }}>{children}</table>
                   </div>
-                )
-              },
-              p: ({ children }) => <p style={{ margin: '0 0 10px', lineHeight: '1.75' }}>{children}</p>,
-              ul: ({ children }) => <ul style={{ margin: '6px 0', paddingLeft: '20px' }}>{children}</ul>,
-              ol: ({ children }) => <ol style={{ margin: '6px 0', paddingLeft: '20px' }}>{children}</ol>,
-              li: ({ children }) => <li style={{ margin: '3px 0', lineHeight: '1.65' }}>{children}</li>,
-              h1: ({ children }) => <h1 style={{ fontSize: '18px', fontWeight: 600, margin: '16px 0 8px', color: 'var(--grimoire-violet-bright)' }}>{children}</h1>,
-              h2: ({ children }) => <h2 style={{ fontSize: '16px', fontWeight: 600, margin: '14px 0 6px', color: 'var(--grimoire-violet-bright)' }}>{children}</h2>,
-              h3: ({ children }) => <h3 style={{ fontSize: '14px', fontWeight: 600, margin: '12px 0 4px' }}>{children}</h3>,
-              strong: ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--grimoire-text)' }}>{children}</strong>,
-              blockquote: ({ children }) => (
-                <blockquote style={{
-                  borderLeft: '3px solid var(--grimoire-violet)',
-                  paddingLeft: '12px', margin: '10px 0',
-                  color: 'var(--grimoire-muted)', fontStyle: 'italic',
-                }}>{children}</blockquote>
-              ),
-              table: ({ children }) => (
-                <div style={{ overflowX: 'auto', margin: '12px 0' }}>
-                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '13px' }}>{children}</table>
-                </div>
-              ),
-              th: ({ children }) => (
-                <th style={{ padding: '8px 12px', background: 'rgba(139,92,246,0.08)', borderBottom: '1px solid var(--grimoire-border)', textAlign: 'left', fontWeight: 500 }}>{children}</th>
-              ),
-              td: ({ children }) => (
-                <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--grimoire-border)' }}>{children}</td>
-              ),
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+                ),
+                th: ({ children }) => (
+                  <th style={{
+                    padding: '9px 13px',
+                    background: 'rgba(201, 177, 135, 0.06)',
+                    borderBottom: '1px solid var(--grimoire-border)',
+                    textAlign: 'left',
+                    fontWeight: 500,
+                    color: 'var(--grimoire-text-strong)',
+                  }}>{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td style={{
+                    padding: '9px 13px',
+                    borderBottom: '1px solid var(--grimoire-border)',
+                  }}>{children}</td>
+                ),
+                a: ({ children, href }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: 'var(--grimoire-gold-bright)',
+                      textDecoration: 'underline',
+                      textDecorationColor: 'rgba(201, 177, 135, 0.4)',
+                      textUnderlineOffset: '3px',
+                    }}
+                  >{children}</a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
 
-          {/* Streaming cursor */}
-          {message.streaming && (
-            <span style={{
-              display: 'inline-block', width: '2px', height: '14px',
-              background: 'var(--grimoire-violet)', marginLeft: '2px',
-              animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom',
-            }} />
-          )}
-        </div>}
+            {/* Streaming cursor — gold tone */}
+            {message.streaming && (
+              <span style={{
+                display: 'inline-block',
+                width: '2px',
+                height: '15px',
+                background: 'var(--grimoire-gold)',
+                marginLeft: '2px',
+                animation: 'blink 1s step-end infinite',
+                verticalAlign: 'text-bottom',
+              }} />
+            )}
+          </div>
+        )}
 
         {/* Sources */}
         {message.sources && message.sources.length > 0 && (
-          <div style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--grimoire-muted)', alignSelf: 'center' }}>Sources:</span>
-            {Array.from(new Set(message.sources.map(src => src.split(' (chunk')[0].trim()))).map((src, i) => (
-              <button
-                key={i}
-                onClick={() => setSelectedSource(src)}
-                title={`View ${src}`}
-                style={{
-                  padding: '3px 10px', borderRadius: '12px', fontSize: '11px',
-                  background: 'rgba(139,92,246,0.08)',
-                  border: '1px solid rgba(139,92,246,0.2)',
-                  color: 'var(--grimoire-violet-bright)',
-                  cursor: 'pointer', transition: 'all 0.15s',
-                  fontFamily: 'inherit',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = 'rgba(139,92,246,0.15)'
-                  e.currentTarget.style.borderColor = 'rgba(139,92,246,0.4)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = 'rgba(139,92,246,0.08)'
-                  e.currentTarget.style.borderColor = 'rgba(139,92,246,0.2)'
-                }}
-              >
-                {src}
-              </button>
-            ))}
+          <div style={{
+            marginTop: '20px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '7px',
+            alignItems: 'center',
+          }}>
+            <span style={{
+              fontSize: '11px',
+              color: 'var(--grimoire-muted-2)',
+              marginRight: '4px',
+              letterSpacing: '-0.1px',
+            }}>
+              Sources
+            </span>
+            {Array.from(new Set(message.sources.map(src => src.split(' (chunk')[0].trim()))).map((src, i) => {
+              // Alternate gold and sage for variety
+              const isGold = i % 2 === 0
+              return (
+                <button
+                  key={i}
+                  onClick={() => setSelectedSource(src)}
+                  title={`View ${src}`}
+                  style={{
+                    padding: '5px 13px',
+                    borderRadius: '999px',
+                    fontSize: '11.5px',
+                    background: isGold
+                      ? 'rgba(201, 177, 135, 0.06)'
+                      : 'rgba(138, 157, 125, 0.06)',
+                    border: `1px solid ${isGold
+                      ? 'rgba(201, 177, 135, 0.2)'
+                      : 'rgba(138, 157, 125, 0.2)'}`,
+                    color: isGold
+                      ? 'var(--grimoire-gold-bright)'
+                      : 'var(--grimoire-sage-bright)',
+                    cursor: 'pointer',
+                    transition: 'var(--grimoire-transition)',
+                    fontFamily: 'inherit',
+                    letterSpacing: '-0.1px',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = isGold
+                      ? 'rgba(201, 177, 135, 0.12)'
+                      : 'rgba(138, 157, 125, 0.12)'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = isGold
+                      ? 'rgba(201, 177, 135, 0.06)'
+                      : 'rgba(138, 157, 125, 0.06)'
+                  }}
+                >
+                  {src}
+                </button>
+              )
+            })}
           </div>
         )}
 
         {/* Source preview modal */}
         <SourcePreview source={selectedSource} onClose={() => setSelectedSource(null)} />
 
-        {/* Latency */}
+        {/* Latency — monospace, refined */}
         {message.latencyMs && !message.streaming && (
-          <p style={{ marginTop: '8px', fontSize: '11px', color: 'var(--grimoire-muted)' }}>
+          <div style={{
+            marginTop: '14px',
+            fontSize: '10.5px',
+            color: 'var(--grimoire-faint-text)',
+            letterSpacing: '0.1px',
+            fontFamily: 'SF Mono, monospace',
+          }}>
             {(message.latencyMs / 1000).toFixed(1)}s
-          </p>
+          </div>
         )}
       </div>
     </motion.div>

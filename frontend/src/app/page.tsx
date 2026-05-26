@@ -30,7 +30,6 @@ export default function Home() {
           onNewSession={newSession}
           onSwitchSession={switchSession}
           onClearSession={clearSession}
-          isDark={isDark}
           onToggleTheme={() => setIsDark(d => !d)}
         />
 

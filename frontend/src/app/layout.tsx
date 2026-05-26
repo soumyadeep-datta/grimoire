@@ -1,9 +1,14 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { ToastProvider } from '@/lib/toast'
+import { ConnectionProvider } from '@/lib/connection'
 
 export const metadata: Metadata = {
   title: 'Grimoire — Developer Knowledge Assistant',
   description: 'Agentic RAG system for querying developer documentation',
+  icons: {
+    icon: '/icons/grimoire-mark.svg',
+  },
 }
 
 export default function RootLayout({
@@ -13,7 +18,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ConnectionProvider>
+          <ToastProvider>
+            {children}
+          </ToastProvider>
+        </ConnectionProvider>
+      </body>
     </html>
   )
 }

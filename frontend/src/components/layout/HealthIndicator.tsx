@@ -1,60 +1,52 @@
 'use client'
-import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
-type HealthStatus = 'connected' | 'disconnected' | 'checking'
+import { useConnection } from '@/lib/connection'
 
 export function HealthIndicator() {
-  const [status, setStatus] = useState<HealthStatus>('checking')
+  const { isOnline } = useConnection()
 
-  const checkHealth = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/health`, {
-        signal: AbortSignal.timeout(3000),
-      })
-      setStatus(res.ok ? 'connected' : 'disconnected')
-    } catch {
-      setStatus('disconnected')
-    }
-  }
-
-  useEffect(() => {
-    checkHealth()
-    // Poll every 15 seconds
-    const interval = setInterval(checkHealth, 15000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const config = {
-    connected: { color: '#10b981', label: 'Connected', pulse: false },
-    disconnected: { color: '#ef4444', label: 'Offline', pulse: false },
-    checking: { color: '#64748b', label: 'Checking...', pulse: true },
-  }[status]
+  const config = isOnline
+    ? {
+        color: 'var(--grimoire-gold)',
+        glow: 'rgba(201, 177, 135, 0.35)',
+        label: 'Connected',
+        labelColor: 'var(--grimoire-muted)',
+      }
+    : {
+        color: 'var(--grimoire-error)',
+        glow: 'rgba(200, 123, 123, 0.3)',
+        label: 'Offline',
+        labelColor: 'var(--grimoire-error)',
+      }
 
   return (
     <div
       title={config.label}
       style={{
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '4px 8px', fontSize: '11px',
-        color: 'var(--grimoire-muted)',
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '4px 8px',
+        fontSize: '11px',
+        letterSpacing: '-0.1px',
       }}
     >
       <motion.div
-        animate={config.pulse ? { opacity: [0.4, 1, 0.4] } : {}}
-        transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
         style={{
-          width: '7px', height: '7px', borderRadius: '50%',
+          width: '6px',
+          height: '6px',
+          borderRadius: '50%',
           background: config.color,
-          boxShadow: status === 'connected' ? `0 0 8px ${config.color}55` : 'none',
+          boxShadow: isOnline ? `0 0 10px ${config.glow}` : 'none',
           flexShrink: 0,
+          animation: isOnline
+            ? 'grimoire-pulse-slow 4s ease-in-out infinite'
+            : 'none',
         }}
       />
       <span style={{
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        color: status === 'disconnected' ? '#fca5a5' : 'var(--grimoire-muted)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        color: config.labelColor,
       }}>
         {config.label}
       </span>

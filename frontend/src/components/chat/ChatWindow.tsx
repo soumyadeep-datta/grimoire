@@ -2,105 +2,131 @@
 import { useEffect, useRef, useState } from 'react'
 import { Message } from '@/lib/types'
 import { MessageBubble } from './MessageBubble'
-import { BookOpen, AlertCircle } from 'lucide-react'
 import { getCollectionStats } from '@/lib/api'
+import { GrimoireMark } from '@/components/icons/GrimoireMark'
 
 interface ChatWindowProps {
   messages: Message[]
-  isDark: boolean
   onSendSuggestion?: (text: string) => void
   onRetry?: (messageId: string) => void
 }
 
-export function ChatWindow({ messages, isDark, onSendSuggestion, onRetry }: ChatWindowProps) {
+export function ChatWindow({ messages, onSendSuggestion, onRetry }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const [totalChunks, setTotalChunks] = useState<number | null>(null)
 
   useEffect(() => {
     getCollectionStats().then(stats => setTotalChunks(stats.total_chunks ?? 0))
-  }, [messages.length]) // re-check after messages change (ingest might have happened)
+  }, [messages.length])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // ===== EMPTY STATE =====
   if (messages.length === 0) {
     const noDocuments = totalChunks === 0
 
     return (
       <div style={{
-        flex: 1, display: 'flex', flexDirection: 'column',
+        flex: 1,
+        display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        padding: '40px 24px', gap: '16px',
+        padding: '40px 24px',
+        gap: '28px',
       }}>
+        {/* Hero GrimoireMark — large, slow breathing glow */}
         <div style={{
-          width: '56px', height: '56px', borderRadius: '16px',
-          background: noDocuments
-            ? 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(239,68,68,0.2))'
-            : 'linear-gradient(135deg, rgba(139,92,246,0.2), rgba(236,72,153,0.2))',
-          border: `1px solid ${noDocuments ? 'rgba(245,158,11,0.3)' : 'var(--grimoire-border)'}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'grimoire-breathe-glow 7s cubic-bezier(0.45, 0, 0.55, 1) infinite',
+          willChange: 'filter, transform',
         }}>
-          {noDocuments
-            ? <AlertCircle size={24} style={{ color: '#f59e0b' }} />
-            : <BookOpen size={24} style={{ color: 'var(--grimoire-violet)' }} />
-          }
+          <GrimoireMark size={120} variant="hero" />
         </div>
 
-        <div style={{ textAlign: 'center' }}>
+        {/* Title + subtitle */}
+        <div style={{ textAlign: 'center', maxWidth: '440px' }}>
           <h2 style={{
-            fontSize: '20px', fontWeight: 600, marginBottom: '8px',
-            background: noDocuments
-              ? 'linear-gradient(135deg, #f59e0b, #ef4444)'
-              : 'linear-gradient(135deg, #a78bfa, #ec4899)',
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+            fontSize: '22px',
+            fontWeight: 500,
+            color: 'var(--grimoire-text-strong)',
+            letterSpacing: '-0.5px',
+            margin: '0 0 10px 0',
           }}>
-            {noDocuments ? 'No documents ingested' : 'Grimoire'}
+            {noDocuments ? 'No documents yet' : 'Welcome to Grimoire'}
           </h2>
-          <p style={{ fontSize: '14px', color: 'var(--grimoire-muted)', maxWidth: '360px', lineHeight: '1.6' }}>
+          <p style={{
+            fontSize: '14px',
+            color: 'var(--grimoire-muted)',
+            lineHeight: '1.7',
+            margin: 0,
+            letterSpacing: '-0.1px',
+          }}>
             {noDocuments
-              ? 'Ingest your documentation first using the API. Run this in your terminal:'
-              : 'Your agentic developer knowledge assistant. Ask anything about your ingested documentation.'
+              ? 'Drop a file in the sidebar to get started, or use the API to ingest your documentation.'
+              : 'Your agentic knowledge assistant. Ask anything about your ingested documents.'
             }
           </p>
         </div>
 
+        {/* Conditional secondary content */}
         {noDocuments ? (
+          // Show curl command for API-curious users
           <div style={{
-            width: '100%', maxWidth: '480px',
-            padding: '12px 16px', borderRadius: '10px',
-            border: '1px solid rgba(245,158,11,0.2)',
-            background: 'rgba(245,158,11,0.05)',
-            fontFamily: 'monospace', fontSize: '12px',
-            color: '#f59e0b', lineHeight: '1.8',
+            width: '100%',
+            maxWidth: '480px',
+            padding: '14px 18px',
+            borderRadius: 'var(--grimoire-radius)',
+            border: '1px solid rgba(201, 177, 135, 0.18)',
+            background: 'rgba(201, 177, 135, 0.04)',
+            fontFamily: 'SF Mono, monospace',
+            fontSize: '12px',
+            color: 'var(--grimoire-gold-bright)',
+            lineHeight: '1.85',
+            letterSpacing: '0.1px',
           }}>
             <div>curl -X POST http://localhost:8000/ingest \</div>
             <div style={{ paddingLeft: '16px' }}>-F &quot;file=@your_doc.md&quot;</div>
-            <div style={{ marginTop: '8px', color: 'var(--grimoire-muted)', fontFamily: 'inherit', fontSize: '11px' }}>
-              Or use POST /ingest/text for raw text. See /docs for full API.
+            <div style={{
+              marginTop: '10px',
+              color: 'var(--grimoire-muted-2)',
+              fontFamily: 'inherit',
+              fontSize: '11px',
+            }}>
+              Or visit /docs for the full API reference.
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '420px', marginTop: '8px' }}>
+          // Suggestion chips
+          <div style={{
+            display: 'flex', flexDirection: 'column',
+            gap: '8px',
+            width: '100%',
+            maxWidth: '440px',
+          }}>
             {[
               'How does authentication work in this codebase?',
               'Explain the main architecture and data flow',
               'What are the key configuration options?',
             ].map((suggestion, i) => (
-              <div key={i}
+              <div
+                key={i}
                 onClick={() => onSendSuggestion?.(suggestion)}
                 style={{
-                  padding: '10px 14px', borderRadius: '10px',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--grimoire-radius)',
                   border: '1px solid var(--grimoire-border)',
                   background: 'var(--grimoire-faint)',
-                  fontSize: '13px', color: 'var(--grimoire-muted)',
-                  cursor: 'pointer', transition: 'all 0.2s',
+                  fontSize: '13px',
+                  color: 'var(--grimoire-muted)',
+                  cursor: 'pointer',
+                  transition: 'var(--grimoire-transition)',
+                  letterSpacing: '-0.1px',
                 }}
                 onMouseEnter={e => {
                   const el = e.currentTarget
-                  el.style.borderColor = 'var(--grimoire-border-hover)'
-                  el.style.color = 'var(--grimoire-text)'
-                  el.style.background = 'rgba(139,92,246,0.08)'
+                  el.style.borderColor = 'rgba(201, 177, 135, 0.25)'
+                  el.style.color = 'var(--grimoire-text-strong)'
+                  el.style.background = 'rgba(201, 177, 135, 0.04)'
                 }}
                 onMouseLeave={e => {
                   const el = e.currentTarget
@@ -118,10 +144,19 @@ export function ChatWindow({ messages, isDark, onSendSuggestion, onRetry }: Chat
     )
   }
 
+  // ===== MESSAGE LIST =====
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 20px' }}>
+    <div style={{
+      flex: 1,
+      overflowY: 'auto',
+      padding: '32px 56px 8px',
+    }}>
       {messages.map(msg => (
-        <MessageBubble key={msg.id} message={msg} isDark={isDark} onRetry={onRetry} />
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onRetry={onRetry}
+        />
       ))}
       <div ref={bottomRef} />
     </div>

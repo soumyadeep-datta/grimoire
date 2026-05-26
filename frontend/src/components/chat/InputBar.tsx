@@ -10,6 +10,7 @@ interface InputBarProps {
 
 export function InputBar({ onSend, isStreaming }: InputBarProps) {
   const [value, setValue] = useState('')
+  const [isFocused, setIsFocused] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleSend = () => {
@@ -34,65 +35,97 @@ export function InputBar({ onSend, isStreaming }: InputBarProps) {
     el.style.height = Math.min(el.scrollHeight, 160) + 'px'
   }
 
+  const isDisabled = !value.trim() || isStreaming
+
   return (
     <div style={{
-      padding: '16px 20px 20px',
-      borderTop: '1px solid var(--grimoire-border)',
-      background: 'var(--grimoire-deep)',
+      padding: '20px 56px 28px',
+      background: 'transparent',
     }}>
       <div style={{
         display: 'flex',
         alignItems: 'flex-end',
-        gap: '10px',
-        padding: '10px 14px',
-        borderRadius: '14px',
-        border: '1px solid var(--grimoire-border)',
-        background: 'var(--grimoire-surface)',
-        transition: 'border-color 0.2s',
-      }}
-        onFocus={e => (e.currentTarget.style.borderColor = 'var(--grimoire-border-hover)')}
-        onBlur={e => (e.currentTarget.style.borderColor = 'var(--grimoire-border)')}
-      >
+        gap: '12px',
+        padding: '13px 16px',
+        borderRadius: 'var(--grimoire-radius-lg)',
+        border: `1px solid ${isFocused
+          ? 'rgba(201, 177, 135, 0.25)'
+          : 'var(--grimoire-border-hover)'}`,
+        background: 'rgba(26, 20, 16, 0.6)',
+        backdropFilter: 'blur(28px) saturate(140%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(140%)',
+        transition: 'var(--grimoire-transition)',
+        boxShadow: isFocused
+          ? '0 12px 40px rgba(0,0,0,0.4), 0 0 0 3px rgba(201, 177, 135, 0.08), inset 0 1px 0 rgba(255,250,235,0.04)'
+          : '0 12px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,250,235,0.04)',
+      }}>
         <textarea
           ref={textareaRef}
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={handleKey}
           onInput={handleInput}
-          placeholder="Ask about your documentation..."
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          placeholder="Ask about your documents..."
           disabled={isStreaming}
           rows={1}
           style={{
-            flex: 1, background: 'transparent', border: 'none', outline: 'none',
-            resize: 'none', color: 'var(--grimoire-text)', fontSize: '14px',
-            lineHeight: '1.6', fontFamily: 'inherit',
-            maxHeight: '160px', overflowY: 'auto',
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            resize: 'none',
+            color: 'var(--grimoire-text-strong)',
+            fontSize: '14.5px',
+            lineHeight: '1.6',
+            fontFamily: 'inherit',
+            letterSpacing: '-0.1px',
+            maxHeight: '160px',
+            overflowY: 'auto',
             opacity: isStreaming ? 0.5 : 1,
+            paddingTop: '5px',
+            paddingBottom: '5px',
           }}
         />
         <motion.button
-          whileTap={{ scale: 0.9 }}
+          whileTap={!isDisabled ? { scale: 0.92 } : undefined}
           onClick={handleSend}
-          disabled={!value.trim() || isStreaming}
+          disabled={isDisabled}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '34px', height: '34px', borderRadius: '10px',
-            border: 'none', cursor: !value.trim() || isStreaming ? 'not-allowed' : 'pointer',
-            background: !value.trim() || isStreaming
-              ? 'rgba(139,92,246,0.15)'
-              : 'linear-gradient(135deg, #8b5cf6, #6d28d9)',
-            color: '#fff', flexShrink: 0, transition: 'all 0.2s',
+            width: '34px', height: '34px',
+            borderRadius: 'var(--grimoire-radius)',
+            border: 'none',
+            cursor: isDisabled ? 'not-allowed' : 'pointer',
+            background: isDisabled
+              ? 'rgba(201, 177, 135, 0.1)'
+              : 'linear-gradient(135deg, var(--grimoire-gold), var(--grimoire-sage))',
+            color: isDisabled
+              ? 'rgba(201, 177, 135, 0.4)'
+              : '#2b2618',
+            flexShrink: 0,
+            transition: 'var(--grimoire-transition)',
+            boxShadow: isDisabled
+              ? 'none'
+              : '0 4px 16px rgba(201, 177, 135, 0.25)',
           }}
         >
           {isStreaming
             ? <Loader2 size={15} className="animate-spin" />
-            : <Send size={15} />
+            : <Send size={14} strokeWidth={2.2} />
           }
         </motion.button>
       </div>
-      <p style={{ marginTop: '8px', textAlign: 'center', fontSize: '11px', color: 'var(--grimoire-muted)' }}>
-        Shift+Enter for new line · Enter to send
-      </p>
+      <div style={{
+        marginTop: '10px',
+        textAlign: 'center',
+        fontSize: '10.5px',
+        color: 'var(--grimoire-faint-text)',
+        letterSpacing: '0.1px',
+      }}>
+        Shift + Enter for new line
+      </div>
     </div>
   )
 }
