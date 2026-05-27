@@ -1,6 +1,6 @@
 # Grimoire — Agentic Developer Knowledge Assistant
 
-> A production-grade RAG system for querying developer documentation and codebases. Combines hybrid retrieval, LangGraph-orchestrated agents, and evaluated answer generation — deployable with a single API key.
+> An agentic RAG system for querying developer documentation and codebases. Combines 4-stage hybrid retrieval, LangGraph-orchestrated multi-tool agents, and evaluated answer generation — deployable with a single API key.
 
 ![Grimoire UI](docs/screenshot.png)
 
