@@ -1,5 +1,14 @@
-# ── Core LLM / Agent ──────────────────────────────────────────────────────────
-aiosqlite>=0.20.0
+# ──────────────────────────────────────────────────────────────────────────────
+# Grimoire — Backend Dependencies
+# ──────────────────────────────────────────────────────────────────────────────
+# Python >= 3.12 required.
+#
+# Required: Anthropic key only (demo mode runs with local embeddings + no rerank).
+# Optional: Voyage, Cohere, Tavily, OpenAI (DeepEval), LangSmith — enable
+#           production-grade retrieval and observability when keys are set.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── LangChain Core ────────────────────────────────────────────────────────────
 langchain>=1.0.0
 langchain-core>=1.0.0
 langchain-anthropic>=1.0.0
@@ -7,22 +16,31 @@ langchain-community>=0.4.0
 langchain-huggingface>=1.0.0
 langchain-openai>=1.0.0
 langchain-text-splitters>=0.3.0
-langchain-chroma>=0.2.0
 
-# ── LangGraph (replaces AgentExecutor) ────────────────────────────────────────
+# ── LangGraph — agent orchestration + checkpointing ──────────────────────────
 langgraph>=1.2.0
 langgraph-checkpoint-sqlite>=3.1.0
+aiosqlite>=0.20.0
 
 # ── LLM Providers ─────────────────────────────────────────────────────────────
 anthropic>=0.50.0
-openai>=1.0.0
+openai>=1.0.0                  # used by DeepEval scorers only
+voyageai>=0.3.0                # optional — production embeddings
+cohere>=5.13.0                 # optional — production reranking
 
-# ── Embeddings ────────────────────────────────────────────────────────────────
+# ── Embeddings (local fallback) ──────────────────────────────────────────────
 sentence-transformers>=4.0.0
 torch>=2.0.0
 
-# ── Vector Store ──────────────────────────────────────────────────────────────
-chromadb>=1.0.0
+# ── Vector Store (Qdrant) + Sparse Retrieval (BM25S) ─────────────────────────
+qdrant-client>=1.12.0
+bm25s>=0.2.0
+
+# ── AST-based code chunking ───────────────────────────────────────────────────
+tree-sitter>=0.23.0
+tree-sitter-python>=0.23.0
+tree-sitter-javascript>=0.23.0
+tree-sitter-typescript>=0.23.0
 
 # ── Web / API ─────────────────────────────────────────────────────────────────
 fastapi>=0.115.0
@@ -39,10 +57,10 @@ python-dotenv>=1.0.0
 pypdf>=4.2.0
 markdown>=3.6
 
-# ── Search ────────────────────────────────────────────────────────────────────
+# ── Search (web fallback tool) ────────────────────────────────────────────────
 tavily-python>=0.3.0
 
-# ── Evaluation ────────────────────────────────────────────────────────────────
+# ── Evaluation (DeepEval + RAGAS) ────────────────────────────────────────────
 deepeval>=4.0.0
 ragas>=0.4.0
 datasets>=2.19.0

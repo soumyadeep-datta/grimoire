@@ -1,36 +1,69 @@
-# Environment — CRITICAL: API keys here
+# ─── Environment — CRITICAL: API keys ──────────────────────────────────────
 .env
 .env.local
+.env.*.local
 
-# Python
+# ─── Python ────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
+*$py.class
 .venv/
 venv/
+ENV/
 *.egg-info/
 dist/
 build/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 htmlcov/
 .coverage
+.ipynb_checkpoints/
 
-# Data / Artifacts
-chroma_data/
-*.db
-backend/data/docs/*.pdf
-backend/data/docs/*.html
+# ─── Backend local data — never commit ─────────────────────────────────────
+qdrant_data/
+checkpoints.db
+checkpoints/
+backend/data/
+*.sqlite
+*.sqlite3
+knowledge.db
 
-# Node
+# ─── Backend evaluation outputs (may contain doc content) ──────────────────
+backend/eval_report_*.json
+
+# ─── Node / Next.js ────────────────────────────────────────────────────────
 frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
 frontend/dist/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
 
-# IDE
+# ─── Logs ──────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+
+# ─── Docker ────────────────────────────────────────────────────────────────
+# (image layers live in Docker's storage, nothing to ignore here, but
+#  excluding the override file pattern just in case)
+docker-compose.override.yml
+
+# ─── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── IDE ───────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
-
-# Docker
-*.log
-qdrant_data/
+*.swo
+# Stale - legacy Chroma data, kept locally but never commit
+chroma_data/
+backend/chroma_data/
+*.db-shm
+*.db-wal
+*.db-journal

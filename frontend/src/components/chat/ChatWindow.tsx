@@ -62,41 +62,14 @@ export function ChatWindow({ messages, onSendSuggestion, onRetry }: ChatWindowPr
             letterSpacing: '-0.1px',
           }}>
             {noDocuments
-              ? 'Drop a file in the sidebar to get started, or use the API to ingest your documentation.'
+              ? 'Drop a file in the sidebar to get started.'
               : 'Your agentic knowledge assistant. Ask anything about your ingested documents.'
             }
           </p>
         </div>
 
-        {/* Conditional secondary content */}
-        {noDocuments ? (
-          // Show curl command for API-curious users
-          <div style={{
-            width: '100%',
-            maxWidth: '480px',
-            padding: '14px 18px',
-            borderRadius: 'var(--grimoire-radius)',
-            border: '1px solid rgba(201, 177, 135, 0.18)',
-            background: 'rgba(201, 177, 135, 0.04)',
-            fontFamily: 'SF Mono, monospace',
-            fontSize: '12px',
-            color: 'var(--grimoire-gold-bright)',
-            lineHeight: '1.85',
-            letterSpacing: '0.1px',
-          }}>
-            <div>curl -X POST http://localhost:8000/ingest \</div>
-            <div style={{ paddingLeft: '16px' }}>-F &quot;file=@your_doc.md&quot;</div>
-            <div style={{
-              marginTop: '10px',
-              color: 'var(--grimoire-muted-2)',
-              fontFamily: 'inherit',
-              fontSize: '11px',
-            }}>
-              Or visit /docs for the full API reference.
-            </div>
-          </div>
-        ) : (
-          // Suggestion chips
+        {/* Suggestion chips — shown only when documents exist */}
+        {!noDocuments && (
           <div style={{
             display: 'flex', flexDirection: 'column',
             gap: '8px',

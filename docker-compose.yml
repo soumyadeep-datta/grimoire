@@ -1,0 +1,105 @@
+# ============================================================================
+# Grimoire — Docker Compose
+# ============================================================================
+# Runs the full Grimoire stack: backend (FastAPI + Qdrant + LangGraph) and
+# frontend (Next.js 16) on a private network.
+#
+# Quick start:
+#   1. cp .env.example .env  (then fill in ANTHROPIC_API_KEY)
+#   2. docker compose up
+#   3. Open http://localhost:3000
+#
+# Optional env vars in .env unlock production-grade features:
+#   VOYAGE_API_KEY  — Voyage-code-3.5 embeddings (1024-dim)
+#   COHERE_API_KEY  — Cohere Rerank v4 final stage
+#   TAVILY_API_KEY  — Web search agent tool
+#   OPENAI_API_KEY  — DeepEval evaluation scorers (eval-time only)
+#   LANGCHAIN_*     — LangSmith tracing dashboard
+# ============================================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: grimoire-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # ── Required ────────────────────────────────────────────────────────
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+
+      # ── Optional API keys ───────────────────────────────────────────────
+      # ${VAR:-} pattern means "empty string if unset" so the app's
+      # degraded-mode logic kicks in cleanly.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # ── LangSmith observability ─────────────────────────────────────────
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-grimoire}
+
+      # ── Application config ──────────────────────────────────────────────
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://frontend:3000"]'
+
+      # ── Storage paths (inside container — mounted as volumes below) ─────
+      QDRANT_PATH: /app/qdrant_data
+      SQLITE_DB_PATH: /app/data/knowledge.db
+
+      # ── RAG tuning ──────────────────────────────────────────────────────
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-voyage-code-3.5}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
+    volumes:
+      # Persist vector store and conversation checkpoints across container
+      # rebuilds. Without these, ingested docs and chat history vanish on
+      # every `docker compose down`.
+      - qdrant_data:/app/qdrant_data
+      - checkpoints:/app/data
+    networks:
+      - grimoire-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Browser-facing URL — baked into the JS bundle at build time.
+        # The browser (not the frontend container) calls the API directly
+        # at http://localhost:8000 via the backend's exposed port.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: grimoire-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NODE_ENV: production
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - grimoire-net
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+    driver: local
+  checkpoints:
+    driver: local
+
+networks:
+  grimoire-net:
+    driver: bridge

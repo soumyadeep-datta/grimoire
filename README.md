@@ -2,6 +2,28 @@
 
 > A production-grade RAG system for querying developer documentation and codebases. Combines hybrid retrieval, LangGraph-orchestrated agents, and evaluated answer generation — deployable with a single API key.
 
+![Grimoire UI](docs/screenshot.png)
+
+---
+
+## Quick Start (Docker — Recommended)
+
+```bash
+git clone https://github.com/soumyadeep-datta/grimoire.git
+cd grimoire
+
+cp .env.example .env
+# Edit .env: add ANTHROPIC_API_KEY (required)
+
+docker compose up
+```
+
+Open [http://localhost:3000](http://localhost:3000) — the full stack is running.
+
+First build takes ~10 minutes (downloading Python + Node images, installing deps, building Next.js bundle). Subsequent runs start in ~5 seconds.
+
+To stop: `docker compose down`. To wipe ingested data and start fresh: `docker compose down -v`.
+
 ---
 
 ## Evaluation Results
@@ -60,18 +82,24 @@ Answer with citations
 
 **Unified memory:** Both agent mode and direct RAG mode write to the same LangGraph SQLite checkpoint store, keyed by `session_id`. History persists across server restarts and is consistent regardless of which query mode was used.
 
+### Frontend
+
+Next.js 16 + TypeScript. Streaming chat UI with source citation modals, file ingestion, session persistence, offline detection, and warm atmospheric styling. Connects to the backend via the standard REST API documented at `/docs`.
+
 ---
 
-## Quick Start
+## Manual Setup (without Docker)
+
+For development or environments where Docker isn't available.
 
 ### Requirements
 - Python 3.12+
+- Node.js 20+
 - `ANTHROPIC_API_KEY` (required — everything else is optional)
 
-### Setup
+### Backend
 
 ```bash
-git clone https://github.com/soumyadeep-datta/grimoire.git
 cd grimoire/backend
 
 python -m venv .venv && source .venv/bin/activate
@@ -80,18 +108,29 @@ pip install -r requirements.txt
 # Verify all dependencies installed correctly
 python verify_setup.py
 
-cp .env.example .env
+cp ../.env.example ../.env
 # Fill in ANTHROPIC_API_KEY (required) and optional keys
-```
 
-### Run
-
-```bash
-cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
 API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Frontend
+
+```bash
+cd grimoire/frontend
+npm install
+npm run dev
+```
+
+UI: [http://localhost:3000](http://localhost:3000)
+
+---
+
+## API Reference
+
+The full interactive API explorer is at [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI) once the backend is running. Common operations:
 
 ### Ingest documents
 
@@ -118,6 +157,11 @@ curl -X POST http://localhost:8000/query \
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"question": "How does X work?", "session_id": "my-session", "use_agent": true}'
+
+# Streaming (Server-Sent Events, used by the frontend)
+curl -X POST http://localhost:8000/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How does X work?", "session_id": "my-session"}'
 ```
 
 ---
@@ -142,7 +186,12 @@ Only `ANTHROPIC_API_KEY` is required. Additional keys unlock better retrieval qu
 
 ```
 grimoire/
+├── docker-compose.yml           # Two services: backend + frontend
+├── .env.example                 # Environment variable template
 ├── backend/
+│   ├── Dockerfile               # Python 3.12 multi-stage build
+│   ├── requirements.txt
+│   ├── verify_setup.py
 │   ├── app/
 │   │   ├── main.py              # FastAPI routes + lifespan (eager init)
 │   │   ├── config.py            # Pydantic settings with optional key handling
@@ -159,11 +208,15 @@ grimoire/
 │   │       ├── dataset.py       # QA pair generation from ingested docs
 │   │       └── evaluate.py      # DeepEval scoring pipeline
 │   ├── tests/                   # 83 tests, 75% coverage
-│   ├── data/docs/               # Sample documents
-│   ├── eval_dataset_v2.json     # 20 evaluation questions
-│   ├── eval_report_v2.json      # Evaluation results
-│   └── .env.example             # Environment variable template
-└── README.md
+│   └── eval_dataset_v2.json     # 20 evaluation questions
+└── frontend/
+    ├── Dockerfile               # Node 20 multi-stage build
+    ├── next.config.ts
+    └── src/
+        ├── app/                 # Next.js App Router
+        ├── components/          # Chat UI, sidebar, modals
+        ├── hooks/               # useChat (streaming, retry, sessions)
+        └── lib/                 # API client, connection context, toast
 ```
 
 ---
@@ -181,15 +234,19 @@ grimoire/
 | AST parsing | tree-sitter 0.25.x (Python, JS, TS) |
 | Agent framework | LangGraph 1.2 + SqliteSaver checkpointing |
 | Backend | FastAPI + Pydantic v2 |
+| Frontend | Next.js 16 + TypeScript |
 | Web search | Tavily |
 | Evaluation | DeepEval 4.x, GPT-4o-mini judge |
 | Observability | LangSmith |
+| Deployment | Docker Compose |
 
 ---
 
 ## Running Evaluation
 
 ```bash
+cd backend
+
 # Generate evaluation dataset from ingested docs
 python -m app.eval.dataset --output eval_dataset_v2.json --n-questions 20
 
@@ -214,11 +271,12 @@ pytest tests/ -v --cov=app --cov-report=term-missing
 
 | Type | Extensions | Chunker |
 |---|---|---|
-| Code | `.py` `.js` `.ts` `.jsx` `.tsx` | AST (tree-sitter) |
+| Code (AST) | `.py` `.js` `.ts` `.jsx` `.tsx` | tree-sitter (semantic boundaries) |
+| Code (text) | `.go` `.rs` `.java` `.cpp` `.c` | RecursiveCharacterTextSplitter |
 | PDF | `.pdf` | PyPDFLoader |
-| Text | `.md` `.txt` `.html` `.rst` | RecursiveCharacterTextSplitter |
-| Config | `.yaml` `.json` `.toml` | RecursiveCharacterTextSplitter |
-| More | `.go` `.rs` `.java` `.cpp` `.c` | RecursiveCharacterTextSplitter |
+| Markup | `.md` `.markdown` `.html` `.htm` `.rst` | RecursiveCharacterTextSplitter |
+| Plain text | `.txt` | RecursiveCharacterTextSplitter |
+| Config | `.yaml` `.yml` `.json` `.toml` | RecursiveCharacterTextSplitter |
 
 ---
 
@@ -237,3 +295,13 @@ Grimoire returns typed HTTP status codes — no generic 500s for upstream issues
 | `504 Gateway Timeout` | Agent exceeded execution time limit |
 
 Corrupted LangGraph checkpoints (from mid-request server crashes) are automatically detected and cleared on the next request — no user action required.
+
+---
+
+## Future Work
+
+- **MCP server** — expose Grimoire as a Model Context Protocol tool so external agents can query it
+- **URL ingestion** — paste a docs URL, auto-fetch and chunk
+- **Dynamic suggestion chips** — generate empty-state questions from ingested document content
+- **Batch ingestion** — stream progress for large doc sets
+- **Light mode** — alternate palette for the warm-dark aesthetic

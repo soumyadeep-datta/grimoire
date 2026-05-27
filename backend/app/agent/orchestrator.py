@@ -216,21 +216,52 @@ class GrimoireAgent:
             logger.warning("Could not write to checkpoint for session %s: %s", session_id, exc)
 
     def get_history(self, session_id: str) -> list[dict[str, str]]:
-        """Return full conversation history for a session from the checkpoint."""
+        """Return full conversation history for a session from the checkpoint.
+
+        Anthropic messages can have either string content or a list of content
+        blocks (text, tool_use, tool_result). We extract only the human-readable
+        text and discard internal tool-call artifacts so the UI doesn't render
+        raw Python dicts.
+        """
         config = {"configurable": {"thread_id": session_id}}
         try:
             state = self.get_graph().get_state(config)
             messages = state.values.get("messages", [])
             history = []
             for msg in messages:
+                content = self._extract_text(msg.content)
+                if not content.strip():
+                    # Skip messages that are pure tool-use with no text
+                    continue
                 if isinstance(msg, HumanMessage):
-                    history.append({"role": "user", "content": str(msg.content)})
+                    history.append({"role": "user", "content": content})
                 elif isinstance(msg, AIMessage):
-                    history.append({"role": "assistant", "content": str(msg.content)})
+                    history.append({"role": "assistant", "content": content})
             return history
         except Exception as exc:
             logger.warning("Could not retrieve history for session %s: %s", session_id, exc)
             return []
+
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Pull only the text out of a LangChain message's content.
+
+        Anthropic's content blocks come through as either:
+          - a plain string (simple message)
+          - a list of dicts: [{"type": "text", "text": "..."}, {"type": "tool_use", ...}]
+        We concatenate text blocks and ignore everything else.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if text:
+                        parts.append(text)
+            return "".join(parts)
+        return str(content)
 
     def get_history_string(self, session_id: str) -> str:
         """Return conversation history as a formatted string for prompt injection."""

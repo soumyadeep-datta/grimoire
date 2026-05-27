@@ -4,11 +4,11 @@
 
 :root {
   /* --- BASE — warm undertone, not cool slate ----------------------------- */
-  --grimoire-void: #100c08;          /* deepest base — warm coffee-black */
-  --grimoire-surface: #1a1410;        /* one layer up */
-  --grimoire-surface-2: #221a14;      /* card / panel surface */
-  --grimoire-faint: rgba(255,245,225,0.025);
-  --grimoire-faint-2: rgba(255,245,225,0.05);
+  --grimoire-void: #0c0e10;          /* deepest base */
+  --grimoire-surface: #12141a;        /* one layer up */
+  --grimoire-surface-2: #181a20;      /* card / panel surface */
+  --grimoire-faint: rgba(255,250,235,0.025);
+  --grimoire-faint-2: rgba(255,250,235,0.05);
 
   /* --- TEXT — warm cream ------------------------------------------------- */
   --grimoire-text: #ebe7df;           /* primary body */

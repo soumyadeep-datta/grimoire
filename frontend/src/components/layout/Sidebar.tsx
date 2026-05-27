@@ -138,7 +138,7 @@ export function Sidebar({
       <div style={{
         width: '260px', flexShrink: 0,
         display: 'flex', flexDirection: 'column',
-        background: 'rgba(20, 14, 10, 0.55)',
+        background: 'rgba(12, 14, 16, 0.5)',
         backdropFilter: 'blur(50px) saturate(140%)',
         WebkitBackdropFilter: 'blur(50px) saturate(140%)',
         borderRight: '1px solid var(--grimoire-border)',
@@ -165,11 +165,8 @@ export function Sidebar({
             }} />
             <GrimoireMark
               size={22}
-              tint="default"
-              style={{
-                position: 'relative',
-                filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.3))',
-              }}
+              tint="black"
+              style={{ position: 'relative' }}
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>

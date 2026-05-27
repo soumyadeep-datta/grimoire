@@ -32,7 +32,7 @@ export function UploadPanel({
   const [expanded, setExpanded] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { isOnline } = useConnection()
+  const { isOnline, markPossiblyOffline } = useConnection()
   const { show } = useToast()
 
   const handleDelete = async (source: string, e: React.MouseEvent) => {
@@ -46,8 +46,17 @@ export function UploadPanel({
     try {
       await deleteSource(source)
       onIngestComplete()
-    } catch {
-      show('Delete failed — please try again', 'error')
+    } catch (err) {
+      // Network-style failure means backend is probably down — recheck health
+      // so the UI updates immediately instead of waiting for the next poll.
+      const isNetworkError = err instanceof TypeError ||
+        (err instanceof Error && err.message.toLowerCase().includes('fetch'))
+      if (isNetworkError) {
+        markPossiblyOffline()
+        show("Lost connection to server — try again when reconnected", 'error')
+      } else {
+        show('Delete failed — please try again', 'error')
+      }
     } finally {
       setDeleting(null)
     }
@@ -199,17 +208,21 @@ export function UploadPanel({
               ? 'Drop to ingest'
               : 'Drop file or click'}
         </div>
-        <div style={{
-          fontSize: '10.5px',
-          color: 'var(--grimoire-muted-2)',
-          letterSpacing: '0.2px',
-        }}>
-          md · py · pdf · ts · txt · html
+        <div
+          title="Supported: PDF, markdown (.md), text, HTML, RST, source code (.py .js .ts .jsx .tsx .go .rs .java .cpp .c), config (.yaml .json .toml)"
+          style={{
+            fontSize: '10.5px',
+            color: 'var(--grimoire-muted-2)',
+            letterSpacing: '0.2px',
+            cursor: 'help',
+          }}
+        >
+          documents, code, and config files
         </div>
         <input
           ref={inputRef}
           type="file"
-          accept=".md,.txt,.py,.js,.ts,.jsx,.tsx,.pdf,.html,.rst,.yaml,.json,.go,.rs,.java,.cpp,.c"
+          accept=".pdf,.md,.markdown,.txt,.html,.htm,.rst,.py,.js,.ts,.jsx,.tsx,.go,.rs,.java,.cpp,.c,.yaml,.yml,.json,.toml"
           onChange={onChange}
           disabled={isUploading}
           style={{ display: 'none' }}

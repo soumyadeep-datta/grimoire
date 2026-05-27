@@ -51,7 +51,7 @@ export function InputBar({ onSend, isStreaming }: InputBarProps) {
         border: `1px solid ${isFocused
           ? 'rgba(201, 177, 135, 0.25)'
           : 'var(--grimoire-border-hover)'}`,
-        background: 'rgba(26, 20, 16, 0.6)',
+        background: 'rgba(18, 20, 22, 0.6)',
         backdropFilter: 'blur(28px) saturate(140%)',
         WebkitBackdropFilter: 'blur(28px) saturate(140%)',
         transition: 'var(--grimoire-transition)',

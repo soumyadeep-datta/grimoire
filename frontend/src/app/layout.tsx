@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: 'Grimoire — Developer Knowledge Assistant',
   description: 'Agentic RAG system for querying developer documentation',
   icons: {
-    icon: '/icons/grimoire-mark.svg',
+    icon: '/icons/grimoire-favicon.svg',
   },
 }
 

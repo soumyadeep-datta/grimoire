@@ -111,7 +111,7 @@ export function MessageBubble({
           position: 'absolute', inset: 0,
           background: 'radial-gradient(circle at 30% 30%, rgba(255,250,235,0.35), transparent 55%)',
         }} />
-        <GrimoireMark size={22} style={{ position: 'relative' }} />
+        <GrimoireMark size={22} tint="black" style={{ position: 'relative' }} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0, paddingTop: '6px' }}>
