@@ -1,6 +1,6 @@
 # Grimoire — Agentic Developer Knowledge Assistant
 
-> An agentic RAG system for querying developer documentation and codebases. Combines 4-stage hybrid retrieval, LangGraph-orchestrated multi-tool agents, and evaluated answer generation — deployable with a single API key.
+> A production-grade RAG system for querying developer documentation and codebases. Combines hybrid retrieval, LangGraph-orchestrated agents, and evaluated answer generation — deployable with a single API key.
 
 ![Grimoire UI](docs/screenshot.png)
 
@@ -300,8 +300,16 @@ Corrupted LangGraph checkpoints (from mid-request server crashes) are automatica
 
 ## Future Work
 
+**Agent capabilities**
+- **Reasoning timeline** — surface the agent's step-by-step decisions (why it chose a tool, when it falls back) as a streaming, collapsible trace in the UI
+- **Self-corrective retrieval** — CRAG-style retrieval grader that classifies results as relevant / ambiguous / incorrect and triggers query rewriting or web-search fallback on low confidence
 - **MCP server** — expose Grimoire as a Model Context Protocol tool so external agents can query it
+
+**Ingestion**
 - **URL ingestion** — paste a docs URL, auto-fetch and chunk
+- **Batch ingestion** — stream progress for large document sets
+
+**Observability & UX**
+- **LangSmith tracing** — wire up trace inspection for agent runs and latency profiling
 - **Dynamic suggestion chips** — generate empty-state questions from ingested document content
-- **Batch ingestion** — stream progress for large doc sets
 - **Light mode** — alternate palette for the warm-dark aesthetic
