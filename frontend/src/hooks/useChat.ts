@@ -1,7 +1,25 @@
 import { useState, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { Message, Session, ToolStatus } from '@/lib/types'
+import { Message, Session, ToolStatus, ToolStep } from '@/lib/types'
 import { streamQuery, clearHistory, getHistory } from '@/lib/api'
+
+/**
+ * Extract inline source citations from answer text.
+ * The agent embeds citations like [Source: hw3_updated.pdf, Chunk 28] in its
+ * responses. We parse these out so they show as clickable pills even if the
+ * SSE sources event failed or was empty.
+ */
+function extractInlineSources(text: string): string[] {
+  const pattern = /\[Source:\s*([^,\]]+?)(?:,\s*Chunk\s*(\d+))?\]/gi
+  const found = new Set<string>()
+  let match
+  while ((match = pattern.exec(text)) !== null) {
+    const source = match[1].trim()
+    const chunk = match[2]
+    found.add(chunk ? `${source} (chunk ${chunk})` : source)
+  }
+  return Array.from(found)
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -13,29 +31,27 @@ export function useChat() {
   const sendMessage = useCallback(async (question: string) => {
     if (!question.trim() || isStreaming) return
 
-    // Add user message
     const userMsg: Message = {
       id: uuidv4(),
       role: 'user',
       content: question,
     }
 
-    // Add streaming assistant placeholder
     const assistantId = uuidv4()
     const assistantMsg: Message = {
       id: assistantId,
       role: 'assistant',
       content: '',
       toolStatuses: [],
+      toolSteps: [],
       streaming: true,
-      originalQuery: question,  // store for retry
+      originalQuery: question,
     }
 
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setIsStreaming(true)
     abortRef.current = false
 
-    // Update session list
     setSessions(prev => {
       const exists = prev.find(s => s.id === currentSessionId)
       if (exists) {
@@ -62,6 +78,8 @@ export function useChat() {
           setMessages(prev =>
             prev.map(m => {
               if (m.id !== assistantId) return m
+
+              // --- Existing keyed status array (kept for compatibility) ---
               const existing = m.toolStatuses ?? []
               const idx = existing.findIndex(t => t.tool === tool)
               const updated: ToolStatus = { tool, status, done }
@@ -69,7 +87,40 @@ export function useChat() {
                 idx >= 0
                   ? existing.map((t, i) => (i === idx ? updated : t))
                   : [...existing, updated]
-              return { ...m, toolStatuses: newStatuses }
+
+              // --- Ordered timeline steps (append-only) ---
+              const steps = m.toolSteps ?? []
+              const last = steps[steps.length - 1]
+              let newSteps: ToolStep[]
+
+              if (last && last.tool === tool && !last.done) {
+                // Same active tool — update status, preserve searchQuery.
+                // When transitioning to done, the status changes from
+                // "Searching: 'X'" to "Found 5 chunks". We keep the
+                // original searchQuery so the UI shows both.
+                newSteps = steps.map((s, i) =>
+                  i === steps.length - 1
+                    ? { ...s, status, done: done ?? false }
+                    : s
+                )
+              } else {
+                // New tool or previous step finished — open a new step.
+                // Save the initial status as searchQuery so it's preserved
+                // when the step completes with a result count.
+                newSteps = [
+                  ...steps,
+                  {
+                    id: `${assistantId}-step-${steps.length}`,
+                    tool,
+                    status,
+                    searchQuery: status,  // preserve the initial "Searching: 'X'"
+                    done: done ?? false,
+                    order: steps.length,
+                  },
+                ]
+              }
+
+              return { ...m, toolStatuses: newStatuses, toolSteps: newSteps }
             })
           )
         },
@@ -92,11 +143,23 @@ export function useChat() {
         },
         onDone: (latencyMs) => {
           setMessages(prev =>
-            prev.map(m =>
-              m.id === assistantId
-                ? { ...m, streaming: false, latencyMs }
-                : m
-            )
+            prev.map(m => {
+              if (m.id !== assistantId) return m
+              const closedSteps = (m.toolSteps ?? []).map(s => ({ ...s, done: true }))
+
+              let finalSources = m.sources ?? []
+              if (finalSources.length === 0) {
+                finalSources = extractInlineSources(m.content)
+              }
+
+              return {
+                ...m,
+                streaming: false,
+                latencyMs,
+                toolSteps: closedSteps,
+                sources: finalSources,
+              }
+            })
           )
           setIsStreaming(false)
         },
@@ -112,7 +175,6 @@ export function useChat() {
         },
       })
     } catch (err) {
-      // Network failure - mark as failed, keep originalQuery for retry
       const errMsg = err instanceof Error ? err.message : 'Connection failed'
       setMessages(prev =>
         prev.map(m =>
@@ -133,13 +195,11 @@ export function useChat() {
   const retryMessage = useCallback((messageId: string) => {
     const msg = messages.find(m => m.id === messageId)
     if (!msg || !msg.originalQuery) return
-    // Remove the failed assistant message and its preceding user message
     setMessages(prev => {
       const idx = prev.findIndex(m => m.id === messageId)
       if (idx < 1) return prev
       return prev.slice(0, idx - 1)
     })
-    // Resend the original query
     setTimeout(() => sendMessage(msg.originalQuery!), 50)
   }, [messages, sendMessage])
 
@@ -150,10 +210,9 @@ export function useChat() {
 
   const switchSession = useCallback(async (sessionId: string) => {
     setCurrentSessionId(sessionId)
-    setMessages([]) // clear UI immediately
+    setMessages([])
     try {
       const history = await getHistory(sessionId)
-      // Convert backend HistoryMessage format to frontend Message format
       const loadedMessages: Message[] = history.map((m: { role: string; content: string }) => ({
         id: uuidv4(),
         role: m.role === 'user' ? 'user' : 'assistant',

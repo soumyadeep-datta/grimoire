@@ -1,5 +1,8 @@
 'use client'
 import ReactMarkdown from 'react-markdown'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Copy, Check, RefreshCw, AlertCircle } from 'lucide-react'
@@ -9,6 +12,18 @@ import { Message } from '@/lib/types'
 import { ToolTrace } from './ToolTrace'
 import { SourcePreview } from './SourcePreview'
 import { GrimoireMark } from '@/components/icons/GrimoireMark'
+
+/**
+ * Strip inline source citations from the answer text.
+ * The agent embeds [Source: X, Chunk Y] in its responses, but we show
+ * these as clickable pills below the answer instead.
+ */
+function stripInlineSources(text: string): string {
+  return text
+    .replace(/\[Source:\s*[^\]]+\]/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
 
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false)
@@ -106,7 +121,6 @@ export function MessageBubble({
         overflow: 'hidden',
         boxShadow: '0 6px 20px rgba(201, 177, 135, 0.2), 0 0 0 1px rgba(255,250,235,0.06)',
       }}>
-        {/* Subtle inner highlight */}
         <div style={{
           position: 'absolute', inset: 0,
           background: 'radial-gradient(circle at 30% 30%, rgba(255,250,235,0.35), transparent 55%)',
@@ -115,9 +129,9 @@ export function MessageBubble({
       </div>
 
       <div style={{ flex: 1, minWidth: 0, paddingTop: '6px' }}>
-        {/* Tool trace pill */}
-        {message.toolStatuses && message.toolStatuses.length > 0 && (
-          <ToolTrace tools={message.toolStatuses} />
+        {/* Tool trace timeline */}
+        {message.toolSteps && message.toolSteps.length > 0 && (
+          <ToolTrace steps={message.toolSteps} />
         )}
 
         {/* Failed state with retry button */}
@@ -185,7 +199,7 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Content — markdown body */}
+        {/* Content — markdown body with LaTeX support */}
         {!message.failed && (
           <div style={{
             fontSize: '14.5px',
@@ -194,6 +208,8 @@ export function MessageBubble({
             letterSpacing: '-0.1px',
           }}>
             <ReactMarkdown
+              remarkPlugins={[remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
                 code({ node, className, children, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '')
@@ -353,7 +369,7 @@ export function MessageBubble({
                 ),
               }}
             >
-              {message.content}
+              {stripInlineSources(message.content)}
             </ReactMarkdown>
 
             {/* Streaming cursor — gold tone */}
@@ -389,7 +405,6 @@ export function MessageBubble({
               Sources
             </span>
             {Array.from(new Set(message.sources.map(src => src.split(' (chunk')[0].trim()))).map((src, i) => {
-              // Alternate gold and sage for variety
               const isGold = i % 2 === 0
               return (
                 <button

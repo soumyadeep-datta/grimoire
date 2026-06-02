@@ -24,6 +24,7 @@ Startup:
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -97,7 +98,7 @@ async def lifespan(app: FastAPI):
         logger.error("Vector store warm-up failed: %s", exc)
 
     # 3. Initialize AsyncSqliteSaver for streaming endpoint
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as async_saver:
+    async with AsyncSqliteSaver.from_conn_string(os.environ.get("CHECKPOINT_DB_PATH", "checkpoints.db")) as async_saver:
         agent = get_agent()
         agent.set_async_checkpointer(async_saver)
         logger.info("Async graph initialized for streaming.")
@@ -335,6 +336,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             latency_ms=round(latency_ms, 2),
         )
 
+    # ── Streaming helper ──────────────────────────────────────────────────────
+
+    def _extract_tool_query(event: dict) -> str:
+        """Pull the query/input string from a tool start event for display."""
+        tool_input = event.get("data", {}).get("input", {})
+        query = ""
+        if isinstance(tool_input, dict):
+            query = tool_input.get("query", tool_input.get("code", tool_input.get("question", "")))
+        if isinstance(query, str) and len(query) > 80:
+            query = query[:77] + "..."
+        return query
+
+    def _tool_start_status(tool_name: str, query: str) -> str:
+        """Build a human-readable status message for tool start."""
+        if query:
+            return {
+                "rag_retrieval": f'Searching: "{query}"',
+                "web_search": f'Web search: "{query}"',
+                "database_query": f'SQL query: "{query}"',
+                "code_executor": "Executing code...",
+            }.get(tool_name, f"Running {tool_name}...")
+        return {
+            "rag_retrieval": "Searching documentation...",
+            "web_search": "Searching the web...",
+            "database_query": "Querying database...",
+            "code_executor": "Executing code...",
+        }.get(tool_name, f"Running {tool_name}...")
+
+    def _tool_end_status(tool_name: str, output: str) -> str:
+        """Build a human-readable completion message with result counts."""
+        if tool_name == "rag_retrieval":
+            # Each result block starts with [N]
+            chunk_count = sum(1 for line in output.splitlines() if line.strip().startswith("["))
+            return f"Found {chunk_count} chunk{'s' if chunk_count != 1 else ''}" if chunk_count > 0 else "No results found"
+        elif tool_name == "web_search":
+            result_count = output.count("http")
+            return f"Found {result_count} result{'s' if result_count != 1 else ''}" if result_count > 0 else "No results"
+        elif tool_name == "code_executor":
+            return "Execution complete"
+        elif tool_name == "database_query":
+            row_count = output.count("\n")
+            return f"Returned {row_count} row{'s' if row_count != 1 else ''}" if row_count > 0 else "Query complete"
+        return "Done"
+
+    def _extract_sources_from_output(output: str, sources: set[str]) -> None:
+        """Parse rag_retrieval output for source citations."""
+        for line in output.splitlines():
+            if "Source:" in line and "Chunk:" in line:
+                try:
+                    src_part = line.split("Source:")[1].split("|")[0].strip()
+                    chunk_part = line.split("Chunk:")[1].split("|")[0].strip()
+                    sources.add(f"{src_part} (chunk {chunk_part})")
+                except IndexError:
+                    pass
+
+    def _handle_content_chunk(chunk, answer_parts: list[str]):
+        """Extract text from a chat model stream chunk, yield SSE data strings."""
+        if not chunk or not hasattr(chunk, "content") or not chunk.content:
+            return
+        content = chunk.content
+        events = []
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if text:
+                        answer_parts.append(text)
+                        events.append(text)
+        elif isinstance(content, str) and content:
+            answer_parts.append(content)
+            events.append(content)
+        return events
+
     @app.post(
         "/query/stream",
         tags=["Agent"],
@@ -382,42 +456,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
                     if kind == "on_tool_start":
                         tool_name = name
-                        status_msg = {
-                            "rag_retrieval": "Searching documentation...",
-                            "web_search": "Searching the web...",
-                            "database_query": "Querying database...",
-                            "code_executor": "Executing code...",
-                        }.get(tool_name, f"Running {tool_name}...")
+                        query = _extract_tool_query(event)
+                        status_msg = _tool_start_status(tool_name, query)
                         yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': status_msg})}\n\n"
 
                     elif kind == "on_tool_end":
                         tool_name = name
                         output = str(event.get("data", {}).get("output", ""))
                         if tool_name == "rag_retrieval":
-                            for line in output.splitlines():
-                                if "Source:" in line and "Chunk:" in line:
-                                    try:
-                                        src_part = line.split("Source:")[1].split("|")[0].strip()
-                                        chunk_part = line.split("Chunk:")[1].split("|")[0].strip()
-                                        sources.add(f"{src_part} (chunk {chunk_part})")
-                                    except IndexError:
-                                        pass
-                        yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': 'Done', 'done': True})}\n\n"
+                            _extract_sources_from_output(output, sources)
+                        done_msg = _tool_end_status(tool_name, output)
+                        yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': done_msg, 'done': True})}\n\n"
 
                     elif kind == "on_chat_model_stream":
                         chunk = event.get("data", {}).get("chunk")
-                        if chunk and hasattr(chunk, "content") and chunk.content:
-                            content = chunk.content
-                            if isinstance(content, list):
-                                for block in content:
-                                    if isinstance(block, dict) and block.get("type") == "text":
-                                        text = block.get("text", "")
-                                        if text:
-                                            answer_parts.append(text)
-                                            yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
-                            elif isinstance(content, str) and content:
-                                answer_parts.append(content)
-                                yield f"event: token\ndata: {json.dumps({'text': content})}\n\n"
+                        texts = _handle_content_chunk(chunk, answer_parts)
+                        if texts:
+                            for text in texts:
+                                yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
 
                 latency_ms = round((time.monotonic() - start) * 1000, 2)
                 full_answer = "".join(answer_parts)
@@ -439,30 +495,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         async for event in _run_stream(graph, config):
                             kind = event["event"]
                             name = event.get("name", "")
+
                             if kind == "on_tool_start":
                                 tool_name = name
-                                status_msg = {"rag_retrieval": "Searching documentation...", "web_search": "Searching the web...", "database_query": "Querying database...", "code_executor": "Executing code..."}.get(tool_name, f"Running {tool_name}...")
+                                query = _extract_tool_query(event)
+                                status_msg = _tool_start_status(tool_name, query)
                                 yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': status_msg})}\n\n"
+
                             elif kind == "on_tool_end":
-                                yield f"event: status\ndata: {json.dumps({'tool': name, 'status': 'Done', 'done': True})}\n\n"
+                                tool_name = name
+                                output = str(event.get("data", {}).get("output", ""))
+                                if tool_name == "rag_retrieval":
+                                    _extract_sources_from_output(output, sources)
+                                done_msg = _tool_end_status(tool_name, output)
+                                yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': done_msg, 'done': True})}\n\n"
+
                             elif kind == "on_chat_model_stream":
                                 chunk = event.get("data", {}).get("chunk")
-                                if chunk and hasattr(chunk, "content") and chunk.content:
-                                    c = chunk.content
-                                    if isinstance(c, list):
-                                        for block in c:
-                                            if isinstance(block, dict) and block.get("type") == "text":
-                                                text = block.get("text", "")
-                                                if text:
-                                                    answer_parts.append(text)
-                                                    yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
-                                    elif isinstance(c, str) and c:
-                                        answer_parts.append(c)
-                                        yield f"event: token\ndata: {json.dumps({'text': c})}\n\n"
+                                texts = _handle_content_chunk(chunk, answer_parts)
+                                if texts:
+                                    for text in texts:
+                                        yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+
                         latency_ms = round((time.monotonic() - start) * 1000, 2)
                         full_answer = "".join(answer_parts)
-                        await asyncio.get_running_loop().run_in_executor(None, agent.add_to_checkpoint, body.session_id, body.question, full_answer)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, agent.add_to_checkpoint,
+                            body.session_id, body.question, full_answer
+                        )
+                        yield f"event: sources\ndata: {json.dumps({'sources': sorted(sources)})}\n\n"
                         yield f"event: done\ndata: {json.dumps({'latency_ms': latency_ms})}\n\n"
+
                     except Exception as retry_exc:
                         yield f"event: error\ndata: {json.dumps({'message': str(retry_exc)})}\n\n"
                 elif "overloaded" in err.lower() or "529" in err:
@@ -477,7 +540,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",  # disable nginx buffering
+                "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
             },
         )

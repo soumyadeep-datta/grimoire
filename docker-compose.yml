@@ -50,6 +50,7 @@ services:
       # ── Storage paths (inside container — mounted as volumes below) ─────
       QDRANT_PATH: /app/qdrant_data
       SQLITE_DB_PATH: /app/data/knowledge.db
+      CHECKPOINT_DB_PATH: /app/data/checkpoints.db
 
       # ── RAG tuning ──────────────────────────────────────────────────────
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-voyage-code-3.5}
