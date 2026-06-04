@@ -1,22 +1,32 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export interface StreamCallbacks {
-  onStatus: (tool: string, status: string, done?: boolean) => void
+  onThinking: (text: string) => void
+  onStatus: (tool: string, status: string, done?: boolean, elapsedMs?: number, metrics?: Record<string, unknown>) => void
   onToken: (text: string) => void
   onSources: (sources: string[]) => void
   onDone: (latencyMs: number) => void
   onError: (message: string) => void
 }
 
+/**
+ * Stream a query to the backend via SSE.
+ *
+ * Accepts an optional AbortSignal — when the signal fires, the fetch is
+ * cancelled immediately. This prevents stale tokens from a previous stream
+ * from corrupting the current conversation's React state.
+ */
 export async function streamQuery(
   question: string,
   sessionId: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/query/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question, session_id: sessionId, use_agent: true }),
+    signal,
   })
 
   if (!response.ok) {
@@ -49,8 +59,11 @@ export async function streamQuery(
         try {
           const data = JSON.parse(line.slice(6))
           switch (currentEvent) {
+            case 'thinking':
+              callbacks.onThinking(data.text)
+              break
             case 'status':
-              callbacks.onStatus(data.tool, data.status, data.done)
+              callbacks.onStatus(data.tool, data.status, data.done, data.elapsed_ms, data.metrics)
               break
             case 'token':
               callbacks.onToken(data.text)
@@ -92,8 +105,6 @@ export async function getCollectionStats() {
 }
 
 export async function deleteSource(source: string) {
-  const res = await fetch(`${API_BASE}/collections/source?source=${encodeURIComponent(source)}`, {
-    method: 'DELETE',
-  })
+  const res = await fetch(`${API_BASE}/collections/source?source=${encodeURIComponent(source)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
 }

@@ -1,14 +1,41 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { Message, Session, ToolStatus, ToolStep } from '@/lib/types'
 import { streamQuery, clearHistory, getHistory } from '@/lib/api'
 
-/**
- * Extract inline source citations from answer text.
- * The agent embeds citations like [Source: hw3_updated.pdf, Chunk 28] in its
- * responses. We parse these out so they show as clickable pills even if the
- * SSE sources event failed or was empty.
- */
+// ── localStorage helpers ─────────────────────────────────────────────────────
+// Sessions are persisted in the browser so the sidebar survives page reloads.
+// The actual conversation content lives in the backend checkpoint store —
+// localStorage only tracks which session IDs exist and their labels.
+
+const STORAGE_KEY = 'grimoire-sessions'
+
+function loadSessions(): Session[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return parsed.map((s: any) => ({
+      ...s,
+      createdAt: new Date(s.createdAt),
+    }))
+  } catch {
+    return []
+  }
+}
+
+function saveSessions(sessions: Session[]) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions))
+  } catch {
+    // localStorage full or unavailable — silently degrade
+  }
+}
+
+// ── Inline source extraction ─────────────────────────────────────────────────
+
 function extractInlineSources(text: string): string[] {
   const pattern = /\[Source:\s*([^,\]]+?)(?:,\s*Chunk\s*(\d+))?\]/gi
   const found = new Set<string>()
@@ -21,15 +48,38 @@ function extractInlineSources(text: string): string[] {
   return Array.from(found)
 }
 
+// ── Hook ─────────────────────────────────────────────────────────────────────
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([])
-  const [sessions, setSessions] = useState<Session[]>([])
+  const [sessions, setSessions] = useState<Session[]>(loadSessions)
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => uuidv4())
   const [isStreaming, setIsStreaming] = useState(false)
-  const abortRef = useRef<boolean>(false)
+
+  // AbortController ref — used to cancel in-flight SSE streams when the
+  // user switches conversations or starts a new one mid-stream.
+  const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Persist sessions to localStorage whenever they change
+  useEffect(() => {
+    saveSessions(sessions)
+  }, [sessions])
+
+  // Cancel any in-flight stream. Called before starting a new stream,
+  // switching sessions, or creating a new conversation.
+  const cancelStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    setIsStreaming(false)
+  }, [])
 
   const sendMessage = useCallback(async (question: string) => {
     if (!question.trim() || isStreaming) return
+
+    // Cancel any previous in-flight stream
+    cancelStream()
 
     const userMsg: Message = {
       id: uuidv4(),
@@ -42,6 +92,8 @@ export function useChat() {
       id: assistantId,
       role: 'assistant',
       content: '',
+      thinking: '',
+      thinkingDone: false,
       toolStatuses: [],
       toolSteps: [],
       streaming: true,
@@ -50,15 +102,17 @@ export function useChat() {
 
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setIsStreaming(true)
-    abortRef.current = false
 
+    // Create a fresh AbortController for this stream
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    // Update session list
     setSessions(prev => {
       const exists = prev.find(s => s.id === currentSessionId)
       if (exists) {
         return prev.map(s =>
-          s.id === currentSessionId
-            ? { ...s, lastMessage: question }
-            : s
+          s.id === currentSessionId ? { ...s, lastMessage: question } : s
         )
       }
       return [
@@ -74,62 +128,71 @@ export function useChat() {
 
     try {
       await streamQuery(question, currentSessionId, {
-        onStatus: (tool, status, done) => {
+        onThinking: (text) => {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantId
+                ? { ...m, thinking: (m.thinking ?? '') + text }
+                : m
+            )
+          )
+        },
+        onStatus: (tool, status, done, elapsedMs, metrics) => {
           setMessages(prev =>
             prev.map(m => {
               if (m.id !== assistantId) return m
 
-              // --- Existing keyed status array (kept for compatibility) ---
+              const thinkingDone = true
+
+              // Keyed status array (compatibility)
               const existing = m.toolStatuses ?? []
               const idx = existing.findIndex(t => t.tool === tool)
               const updated: ToolStatus = { tool, status, done }
-              const newStatuses =
-                idx >= 0
-                  ? existing.map((t, i) => (i === idx ? updated : t))
-                  : [...existing, updated]
+              const newStatuses = idx >= 0
+                ? existing.map((t, i) => (i === idx ? updated : t))
+                : [...existing, updated]
 
-              // --- Ordered timeline steps (append-only) ---
+              // Ordered timeline steps
               const steps = m.toolSteps ?? []
               const last = steps[steps.length - 1]
               let newSteps: ToolStep[]
-
               if (last && last.tool === tool && !last.done) {
-                // Same active tool — update status, preserve searchQuery.
-                // When transitioning to done, the status changes from
-                // "Searching: 'X'" to "Found 5 chunks". We keep the
-                // original searchQuery so the UI shows both.
                 newSteps = steps.map((s, i) =>
                   i === steps.length - 1
-                    ? { ...s, status, done: done ?? false }
+                    ? {
+                        ...s,
+                        status,
+                        done: done ?? false,
+                        elapsedMs: elapsedMs,
+                        metrics: (metrics as ToolStep['metrics']) ?? s.metrics,
+                      }
                     : s
                 )
               } else {
-                // New tool or previous step finished — open a new step.
-                // Save the initial status as searchQuery so it's preserved
-                // when the step completes with a result count.
                 newSteps = [
                   ...steps,
                   {
                     id: `${assistantId}-step-${steps.length}`,
                     tool,
                     status,
-                    searchQuery: status,  // preserve the initial "Searching: 'X'"
+                    searchQuery: status,
                     done: done ?? false,
                     order: steps.length,
+                    elapsedMs: elapsedMs,
+                    metrics: metrics as ToolStep['metrics'],
                   },
                 ]
               }
 
-              return { ...m, toolStatuses: newStatuses, toolSteps: newSteps }
+              return { ...m, thinkingDone, toolStatuses: newStatuses, toolSteps: newSteps }
             })
           )
         },
         onToken: (text) => {
-          if (abortRef.current) return
           setMessages(prev =>
             prev.map(m =>
               m.id === assistantId
-                ? { ...m, content: m.content + text }
+                ? { ...m, content: m.content + text, thinkingDone: true }
                 : m
             )
           )
@@ -142,6 +205,7 @@ export function useChat() {
           )
         },
         onDone: (latencyMs) => {
+          abortControllerRef.current = null
           setMessages(prev =>
             prev.map(m => {
               if (m.id !== assistantId) return m
@@ -152,8 +216,18 @@ export function useChat() {
                 finalSources = extractInlineSources(m.content)
               }
 
+              let finalContent = m.content
+              let finalThinking = m.thinking
+              if (!finalContent && finalThinking) {
+                finalContent = finalThinking
+                finalThinking = ''
+              }
+
               return {
                 ...m,
+                content: finalContent,
+                thinking: finalThinking,
+                thinkingDone: true,
                 streaming: false,
                 latencyMs,
                 toolSteps: closedSteps,
@@ -164,18 +238,34 @@ export function useChat() {
           setIsStreaming(false)
         },
         onError: (message) => {
+          abortControllerRef.current = null
           setMessages(prev =>
             prev.map(m =>
               m.id === assistantId
-                ? { ...m, content: message, streaming: false, failed: true }
+                ? { ...m, content: message, streaming: false, failed: true, thinkingDone: true }
                 : m
             )
           )
           setIsStreaming(false)
         },
-      })
+      }, controller.signal)
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Connection failed'
+      // AbortError means we intentionally cancelled — don't show error
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        // Stream was cancelled by user action (switching conversations).
+        // Mark the message as not-streaming but don't show an error.
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantId && m.streaming
+              ? { ...m, streaming: false, thinkingDone: true }
+              : m
+          )
+        )
+        setIsStreaming(false)
+        return
+      }
+
+      abortControllerRef.current = null
       setMessages(prev =>
         prev.map(m =>
           m.id === assistantId
@@ -184,13 +274,14 @@ export function useChat() {
                 content: 'Unable to reach the server. Please try again in a moment.',
                 streaming: false,
                 failed: true,
+                thinkingDone: true,
               }
             : m
         )
       )
       setIsStreaming(false)
     }
-  }, [currentSessionId, isStreaming])
+  }, [currentSessionId, isStreaming, cancelStream])
 
   const retryMessage = useCallback((messageId: string) => {
     const msg = messages.find(m => m.id === messageId)
@@ -204,11 +295,13 @@ export function useChat() {
   }, [messages, sendMessage])
 
   const newSession = useCallback(() => {
+    cancelStream()
     setCurrentSessionId(uuidv4())
     setMessages([])
-  }, [])
+  }, [cancelStream])
 
   const switchSession = useCallback(async (sessionId: string) => {
+    cancelStream()
     setCurrentSessionId(sessionId)
     setMessages([])
     try {
@@ -221,25 +314,19 @@ export function useChat() {
       }))
       setMessages(loadedMessages)
     } catch {
-      // If history fetch fails, just stay with empty messages
+      // If history fetch fails, stay with empty messages
     }
-  }, [])
+  }, [cancelStream])
 
   const clearSession = useCallback(async () => {
+    cancelStream()
     await clearHistory(currentSessionId)
     setMessages([])
     setSessions(prev => prev.filter(s => s.id !== currentSessionId))
-  }, [currentSessionId])
+  }, [currentSessionId, cancelStream])
 
   return {
-    messages,
-    sessions,
-    currentSessionId,
-    isStreaming,
-    sendMessage,
-    retryMessage,
-    newSession,
-    switchSession,
-    clearSession,
+    messages, sessions, currentSessionId, isStreaming,
+    sendMessage, retryMessage, newSession, switchSession, clearSession,
   }
 }

@@ -297,6 +297,48 @@ Grimoire returns typed HTTP status codes — no generic 500s for upstream issues
 Corrupted LangGraph checkpoints (from mid-request server crashes) are automatically detected and cleared on the next request — no user action required.
 
 ---
+## Design Decisions
+
+### Tool-Level Exception Handling
+
+LangGraph checkpoints state after each node transition. If a tool raises an unhandled exception, the checkpoint contains an `AIMessage` with `tool_calls` but no corresponding `ToolMessage` — leaving the graph in an irrecoverable `INVALID_CHAT_HISTORY` state that corrupts the session permanently.
+
+**Decision:** All tools catch exceptions internally and return error strings instead of raising. This ensures LangGraph always receives a valid `ToolMessage`, keeping the checkpoint intact regardless of upstream API failures (Voyage rate limits, Tavily timeouts, SQLite errors).
+
+See: [LangGraph INVALID_CHAT_HISTORY troubleshooting](https://langchain-ai.github.io/langgraph/troubleshooting/errors/INVALID_CHAT_HISTORY/)
+
+### Backend State Healing on Disconnection
+
+When a user switches conversations or closes the browser mid-stream, the frontend's `AbortController` severs the SSE connection. The backend catches this via `request.is_disconnected()` and `asyncio.CancelledError`, then inspects the graph state for dangling `tool_calls`. If found, synthetic `ToolMessage` objects are injected via `graph.aupdate_state(config, {"messages": ...}, as_node="tools")` to restore valid state machine transitions.
+
+**Result:** Users can abort, switch, or refresh at any point during a stream without corrupting the conversation checkpoint. The session remains resumable.
+
+### State Architecture & Telemetry Separation
+
+Grimoire implements a strict separation between volatile runtime telemetry and immutable conversation history:
+
+- **Live sessions** stream real-time execution metadata via Server-Sent Events — agent reasoning traces, tool search queries, step latencies, reranker similarity scores, and chunk counts. This data exists only in the frontend's React state during the active session.
+- **Historical sessions** are persisted as text via LangGraph's SQLite checkpoint store. Intermediate vector coordinates, execution metrics, and reasoning traces are deliberately excluded post-stream to keep storage writes decoupled from analytical telemetry.
+
+This mirrors industry practice: ChatGPT and Claude both serialize historical conversations as text, reserving structured telemetry for live observability pipelines (LangSmith, Prometheus) rather than transactional user databases.
+
+### Single-Collection, Mode-Locked at Startup
+
+The embedding model (Voyage-code-3.5 at 1024 dimensions, or local all-MiniLM-L6-v2 at 384 dimensions) is locked at server startup based on available API keys. All documents are stored in a single Qdrant collection with a fixed vector dimension.
+
+**Why not runtime fallback:** Switching embedding models at runtime would produce query vectors with mismatched dimensions (384 vs 1024). Qdrant rejects dimension mismatches at the query level — there is no graceful degradation path. A dual-collection architecture was evaluated and rejected due to the complexity of maintaining parallel indices and merging results across incompatible vector spaces.
+
+### In-Memory BM25S with Qdrant Sparse Vector Migration Path
+
+Lexical search uses BM25S loaded into application memory at startup. This provides a zero-dependency, self-contained hybrid retrieval pipeline that works without external tokenizer services.
+
+**Trade-off:** The BM25S vocabulary scales linearly with corpus size — O(N) memory at startup. For production-scale deployments managing large document collections, the migration path is routing sparse token weights natively into Qdrant's [named sparse vectors](https://qdrant.tech/documentation/concepts/vectors/#named-vectors), shifting token indexing from application memory to the database engine for O(1) startup overhead and horizontal scalability via Qdrant cluster sharding with server-side Reciprocal Rank Fusion.
+
+### Unified Checkpoint-Based Conversation Memory
+
+Both the agent mode (LangGraph ReAct loop) and direct RAG mode share the same SQLite checkpoint store, keyed by `session_id`. This means conversation history is consistent regardless of which query path was used — a user can start with direct RAG for fast answers and switch to agent mode for complex queries without losing context.
+
+The checkpoint store also provides automatic persistence across server restarts via Docker volume mounts (`CHECKPOINT_DB_PATH`), eliminating the need for a separate session management database.
 
 ## Future Work
 

@@ -129,9 +129,14 @@ export function MessageBubble({
       </div>
 
       <div style={{ flex: 1, minWidth: 0, paddingTop: '6px' }}>
-        {/* Tool trace timeline */}
-        {message.toolSteps && message.toolSteps.length > 0 && (
-          <ToolTrace steps={message.toolSteps} />
+        {/* Thinking panel + tool trace timeline */}
+        {((message.toolSteps && message.toolSteps.length > 0) || (message.thinking && message.thinking.trim())) && (
+          <ToolTrace
+            steps={message.toolSteps ?? []}
+            thinking={message.thinking}
+            thinkingDone={message.thinkingDone}
+            isStreaming={message.streaming}
+          />
         )}
 
         {/* Failed state with retry button */}

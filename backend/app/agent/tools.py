@@ -2,7 +2,16 @@
 LangChain tool definitions for the ReAct agent.
 
 Each tool is a typed, documented function decorated with @tool.
-Tools handle their own exceptions and return strings the agent interprets.
+
+CRITICAL: Tools must NEVER raise unhandled exceptions to the graph.
+LangGraph checkpoints state after each node transition. If a tool raises,
+the checkpoint contains an AIMessage with tool_calls but no ToolMessage,
+leaving the graph in an INVALID_CHAT_HISTORY state that corrupts the
+session permanently.
+
+Every tool catches all exceptions and returns an error string instead.
+This ensures LangGraph always gets a valid ToolMessage.
+See: https://langchain-ai.github.io/langgraph/troubleshooting/errors/INVALID_CHAT_HISTORY/
 """
 
 from __future__ import annotations
@@ -17,7 +26,7 @@ from RestrictedPython import compile_restricted, safe_globals, safe_builtins
 from RestrictedPython.PrintCollector import PrintCollector
 
 from app.config import get_settings
-from app.exceptions import CollectionNotFoundError, ToolExecutionError
+from app.exceptions import CollectionNotFoundError
 from app.rag.retriever import get_vector_store
 
 logger = logging.getLogger(__name__)
@@ -41,8 +50,17 @@ def rag_retrieval(
     except CollectionNotFoundError:
         return "No documents ingested yet. Call POST /ingest with documentation first."
     except Exception as exc:
-        logger.error("rag_retrieval failed: %s", exc)
-        raise ToolExecutionError("rag_retrieval", str(exc)) from exc
+        # NEVER raise to the graph — return error string so LangGraph
+        # creates a valid ToolMessage and the checkpoint stays clean.
+        err_msg = str(exc)
+        logger.error("rag_retrieval failed: %s", err_msg)
+
+        if "rate limit" in err_msg.lower() or "429" in err_msg:
+            return (
+                "Error: The retrieval system is temporarily rate-limited. "
+                "Please wait a moment before trying again, or rephrase your query."
+            )
+        return f"Error: Retrieval failed — {err_msg}"
 
     if not results:
         return f"No relevant documents found for: '{query}'"
@@ -84,8 +102,12 @@ def web_search(
             include_raw_content=False,
         )
     except Exception as exc:
-        logger.error("Tavily search failed: %s", exc)
-        raise ToolExecutionError("web_search", str(exc)) from exc
+        err_msg = str(exc)
+        logger.error("Tavily search failed: %s", err_msg)
+
+        if "rate limit" in err_msg.lower() or "429" in err_msg:
+            return "Error: Web search is temporarily rate-limited. Please wait a moment."
+        return f"Error: Web search failed — {err_msg}"
 
     results = response.get("results", [])
     if not results:
@@ -138,7 +160,7 @@ def database_query(
             )
     except sqlite3.Error as exc:
         logger.error("SQLite error: %s | Query: %s", exc, sql_query)
-        raise ToolExecutionError("database_query", f"SQLite error: {exc}") from exc
+        return f"Error: SQL query failed — {exc}"
 
 
 # ── Tool 4: Python Code Executor ──────────────────────────────────────────────
@@ -170,13 +192,10 @@ def code_executor(
     allowed_globals = {
         **safe_globals,
         "__builtins__": {**safe_builtins},
-        # PrintCollector CLASS in globals — RestrictedPython instantiates it
         "_print_": PrintCollector,
-        # Required internals for loops and attribute access
         "_getiter_": iter,
         "_getattr_": getattr,
         "_write_": lambda x: x,
-        # Standard library
         "math": math,
         "json": json,
         "re": re,
@@ -187,7 +206,6 @@ def code_executor(
         "combinations": combinations,
         "permutations": permutations,
         "product": product,
-        # Builtins
         "range": range, "len": len, "str": str, "int": int, "float": float,
         "list": list, "dict": dict, "set": set, "tuple": tuple,
         "abs": abs, "max": max, "min": min, "sum": sum, "round": round,
@@ -205,7 +223,6 @@ def code_executor(
     except Exception as exc:
         return f"Runtime error: {type(exc).__name__}: {exc}"
 
-    # _print (no trailing underscore) is where RestrictedPython stores the instance
     collector = local_vars.get("_print")
     output = "".join(collector.txt).strip() if collector else ""
     return output if output else "Code executed (no output produced)."
