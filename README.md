@@ -352,6 +352,10 @@ Corrupted LangGraph checkpoints (from mid-request server crashes) are automatica
 - **Self-Corrective Retrieval** — CRAG-style retrieval grader that classifies results as relevant / ambiguous / incorrect and triggers query rewriting or web-search fallback on low confidence scores.
 - **Model Context Protocol (MCP)** — Expose Grimoire as a native MCP server so external developer tools (e.g., Claude Desktop, Cursor) can programmatically leverage its hybrid context index.
 
+**Data Architecture & Persistence**
+
+- **Polymorphic Block Data Layer** — Migrate the historical session rehydration tier from flat-text primitives to a strongly-typed, polymorphic structural schema (e.g., TextBlock, CodeExecutionBlock, UnifiedTraceBlock). This will allow rich interactive layout metadata and execution traces to natively survive page reloads without bloated database cross-joins.
+
 **Ingestion Scaling**
 
 - **URL Ingestion** — Scrape and extract content dynamically from online reference documentation.
