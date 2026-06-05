@@ -32,7 +32,80 @@ from app.rag.retriever import get_vector_store
 logger = logging.getLogger(__name__)
 
 
-# ── Tool 1: RAG Retrieval ─────────────────────────────────────────────────────
+# ── CRAG: Retrieval Quality Grader ────────────────────────────────────────────
+#
+# Implements the Corrective RAG (CRAG) pattern from Yan et al., 2024.
+# After retrieval, a lightweight LLM call grades each result set as
+# CORRECT / AMBIGUOUS / INCORRECT. On low confidence, the tool hints
+# the ReAct agent to fall back to web_search.
+#
+# Score-based fast path: if the reranker's top score is clearly high
+# (>0.75) or clearly low (<0.25), we skip the LLM call entirely.
+# The LLM grader only fires for the ambiguous middle range.
+
+def _grade_retrieval(query: str, results: list, top_score: float) -> str:
+    """Grade retrieval quality using the CRAG pattern.
+
+    Returns: 'CORRECT', 'AMBIGUOUS', or 'INCORRECT'.
+
+    Fast path based on reranker confidence avoids unnecessary LLM calls:
+    - top_score >= 0.75 → CORRECT (clearly relevant)
+    - top_score <= 0.25 → INCORRECT (clearly irrelevant)
+    - Otherwise → LLM grader decides
+    """
+    # Fast path: skip LLM for obvious cases
+    if top_score >= 0.75:
+        logger.debug("CRAG fast path: CORRECT (top_score=%.3f)", top_score)
+        return "CORRECT"
+    if top_score <= 0.25:
+        logger.debug("CRAG fast path: INCORRECT (top_score=%.3f)", top_score)
+        return "INCORRECT"
+
+    # Ambiguous range — use LLM grader
+    try:
+        from langchain_anthropic import ChatAnthropic
+        from langchain_core.messages import HumanMessage
+        from pydantic import SecretStr
+        from app.agent.prompts import RETRIEVAL_GRADER_PROMPT
+
+        settings = get_settings()
+
+        # Build a compact preview (first 200 chars of top 3 chunks)
+        previews = []
+        for i, r in enumerate(results[:3], 1):
+            preview = r.content[:200].strip().replace("\n", " ")
+            previews.append(f"Chunk {i}: {preview}")
+        chunks_text = "\n".join(previews)
+
+        prompt = RETRIEVAL_GRADER_PROMPT.format(query=query, chunks=chunks_text)
+
+        llm = ChatAnthropic(
+            model=settings.claude_model,
+            api_key=SecretStr(settings.anthropic_api_key),
+            max_tokens=10,
+            temperature=0.0,
+            timeout=10.0,
+        )
+        response = llm.invoke(
+            [HumanMessage(content=prompt)],
+            config={"tags": ["crag_grader"]},
+        )
+        grade = str(response.content).strip().upper()
+
+        if grade not in ("CORRECT", "AMBIGUOUS", "INCORRECT"):
+            logger.warning("CRAG grader returned unexpected value: '%s' — defaulting to AMBIGUOUS", grade)
+            grade = "AMBIGUOUS"
+
+        logger.info("CRAG grade: %s | query='%s' | top_score=%.3f", grade, query[:60], top_score)
+        return grade
+
+    except Exception as exc:
+        # If the grader fails, don't block the pipeline — return results as-is
+        logger.warning("CRAG grader failed: %s — defaulting to CORRECT", exc)
+        return "CORRECT"
+
+
+# ── Tool 1: RAG Retrieval (with CRAG grading) ────────────────────────────────
 
 @tool
 def rag_retrieval(
@@ -43,6 +116,9 @@ def rag_retrieval(
     Search the local knowledge base using semantic similarity.
     Use this FIRST for any question that might be in the ingested docs.
     Returns relevant chunks with source citations and similarity scores.
+
+    Includes a CRAG (Corrective RAG) retrieval grader that evaluates result
+    relevance. On low confidence, the response will suggest using web_search.
     """
     k = max(1, min(k, 10))
     try:
@@ -50,8 +126,6 @@ def rag_retrieval(
     except CollectionNotFoundError:
         return "No documents ingested yet. Call POST /ingest with documentation first."
     except Exception as exc:
-        # NEVER raise to the graph — return error string so LangGraph
-        # creates a valid ToolMessage and the checkpoint stays clean.
         err_msg = str(exc)
         logger.error("rag_retrieval failed: %s", err_msg)
 
@@ -63,8 +137,10 @@ def rag_retrieval(
         return f"Error: Retrieval failed — {err_msg}"
 
     if not results:
-        return f"No relevant documents found for: '{query}'"
+        return f"No relevant documents found for: '{query}'. Consider using web_search."
 
+    # Format the raw retrieval results
+    top_score = max(r.score for r in results)
     chunks = []
     for i, result in enumerate(results, start=1):
         meta = result.document.metadata
@@ -74,7 +150,28 @@ def rag_retrieval(
             f"Similarity: {result.score:.3f}\n"
             f"{textwrap.indent(result.content.strip(), '    ')}"
         )
-    return "\n\n".join(chunks)
+    formatted = "\n\n".join(chunks)
+
+    # ── CRAG: Grade retrieval quality ─────────────────────────────────
+    grade = _grade_retrieval(query, results, top_score)
+
+    if grade == "INCORRECT":
+        return (
+            f"No relevant results found for: '{query}' "
+            f"(top similarity: {top_score:.3f}, CRAG assessment: INCORRECT). "
+            "The retrieved documents do not appear to answer this question. "
+            "Use web_search to find relevant information."
+        )
+    elif grade == "AMBIGUOUS":
+        return (
+            f"[CRAG Assessment: AMBIGUOUS — results may be partially relevant]\n\n"
+            f"{formatted}\n\n"
+            "Note: Retrieval confidence is moderate. Consider supplementing "
+            "with web_search for more comprehensive coverage."
+        )
+    else:
+        # CORRECT — return results as normal
+        return formatted
 
 
 # ── Tool 2: Web Search ────────────────────────────────────────────────────────
@@ -164,12 +261,6 @@ def database_query(
 
 
 # ── Tool 4: Python Code Executor ──────────────────────────────────────────────
-#
-# How RestrictedPython's print works:
-#   - compile_restricted rewrites print(x) → _print_(x)
-#   - _print_ must be the PrintCollector CLASS in globals (not an instance)
-#   - After exec(), local_vars["_print"] holds the instance
-#   - Output lives in that instance's .txt list — join with ''.join(pc.txt)
 
 @tool
 def code_executor(

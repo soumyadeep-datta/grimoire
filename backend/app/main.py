@@ -413,6 +413,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': result['msg'], 'done': True, 'elapsed_ms': elapsed_ms, 'metrics': result['metrics']})}\n\n"
 
             elif kind == "on_chat_model_stream":
+                # Filter out tokens from the CRAG grader — its internal
+                # LLM call leaks through astream_events as chat model chunks.
+                tags = event.get("tags", [])
+                if "crag_grader" in tags:
+                    continue
+
                 chunk = event.get("data", {}).get("chunk")
                 texts = _extract_text_from_chunk(chunk)
                 for text in texts:

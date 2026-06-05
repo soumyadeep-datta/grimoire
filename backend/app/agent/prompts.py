@@ -45,9 +45,14 @@ Write naturally, the way a knowledgeable colleague would explain their next step
 
 ## Your Reasoning Process
 1. **Search first** — for any content-based question, call rag_retrieval before anything else
-2. **Then think** — based on what you actually retrieved, determine what's needed
-3. **Use additional tools** if needed (web_search for current info, etc.)
-4. **Answer** only based on grounded evidence
+2. **Follow CRAG signals** — if rag_retrieval returns a CRAG assessment of INCORRECT or \
+explicitly recommends using web_search, call web_search before answering (if available). \
+Do not answer from your training knowledge alone when retrieval explicitly failed — \
+either use web_search for grounded evidence or clearly state that the information \
+was not found in the available sources.
+3. **Then think** — based on what you actually retrieved, determine what's needed
+4. **Use additional tools** if needed (web_search for current info, etc.)
+5. **Answer** only based on grounded evidence
 
 ## Response Rules
 - ALWAYS cite your sources. For every factual claim, include the source document name and chunk
@@ -72,6 +77,27 @@ Use it to answer the user's question. Cite sources as [Source: {source}, chunk {
 --- END CONTEXT ---
 
 User question: {question}"""
+
+# ── CRAG retrieval grader prompt ──────────────────────────────────────────────
+#
+# Used by the CRAG (Corrective RAG) grader in tools.py to evaluate whether
+# retrieved chunks are relevant to the user's query. The grader returns a
+# single word: CORRECT, AMBIGUOUS, or INCORRECT.
+#
+# Only invoked when the reranker's top similarity score falls in the ambiguous
+# range (0.25–0.75). Clear-cut cases are handled by score thresholds alone.
+
+RETRIEVAL_GRADER_PROMPT = """Evaluate whether these retrieved document chunks are relevant to answering the user's query.
+
+Query: {query}
+
+Retrieved chunks (preview):
+{chunks}
+
+Respond with exactly one word — CORRECT, AMBIGUOUS, or INCORRECT:
+- CORRECT: At least one chunk directly contains information needed to answer the query.
+- AMBIGUOUS: Chunks are somewhat related but may not fully answer the query.
+- INCORRECT: Chunks are not relevant to the query at all."""
 
 # ── Eval dataset generation prompt ────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 # Grimoire — Agentic Developer Knowledge Assistant
 
-> A production-grade RAG system for querying developer documentation and codebases. Combines hybrid retrieval, LangGraph-orchestrated agents, and evaluated answer generation — deployable with a single API key.
+> An agentic RAG system for querying developer documentation and codebases. Combines hybrid retrieval, LangGraph-orchestrated agents, and evaluated answer generation — deployable with a single API key.
 
 ![Grimoire UI](docs/screenshot.png)
 
@@ -58,7 +58,7 @@ Query
 
 **Why hybrid?** Pure dense search misses exact tokens (function names, error codes, API identifiers). Pure BM25 misses semantic similarity. RRF fusion eliminates both failure modes. Cohere Rerank adds cross-encoder precision as a second stage.
 
-**AST-aware chunking:** Code files (`.py`, `.js`, `.ts`) are parsed via tree-sitter and split at semantic boundaries — functions, classes, methods — rather than arbitrary character limits. Each chunk includes a contextual header (file name, imports, parent class) following Anthropic’s Contextual Retrieval pattern.
+**AST-aware chunking:** Code files (`.py`, `.js`, `.ts`) are parsed via tree-sitter and split at semantic boundaries — functions, classes, methods — rather than arbitrary character limits. Each chunk includes a contextual header (file name, imports, parent class) following Anthropic's Contextual Retrieval pattern.
 
 ### Agent Architecture
 
@@ -68,13 +68,13 @@ User Query
     ▼
 LangGraph ReAct Agent (Claude Sonnet 4.6)
     │
-    ├── Tool 1: rag_retrieval    — 4-stage hybrid pipeline over ingested docs
+    ├── Tool 1: rag_retrieval    — 4-stage hybrid pipeline + CRAG grader
     ├── Tool 2: web_search       — Tavily (optional, excluded if no key)
     ├── Tool 3: database_query   — NL→SQL over SQLite knowledge base
     └── Tool 4: code_executor    — RestrictedPython sandbox
     │
     ▼
-LangGraph SQLite Checkpointer (unified memory)
+LangGraph SQLite Checkpointer (unified memory + polymorphic UI blocks)
     │
     ▼
 Answer with citations
@@ -90,6 +90,22 @@ Next.js 16 + TypeScript. Streaming chat UI featuring an auto-expanding live exec
 
 ## Design Decisions
 
+### Self-Corrective Retrieval (CRAG)
+
+Implements the Corrective RAG pattern (Yan et al., 2024) inside the `rag_retrieval` tool. After retrieval, a lightweight LLM grader classifies results as CORRECT, AMBIGUOUS, or INCORRECT:
+
+- **CORRECT** (top reranker score ≥ 0.75): results returned as-is, grader skipped (fast path)
+- **AMBIGUOUS** (0.25–0.75): LLM evaluates relevance, returns results with a suggestion to supplement via web search
+- **INCORRECT** (≤ 0.25 or LLM-graded): chunks withheld, agent prompted to fall back to web search
+
+The grader's internal LLM call is tagged (`crag_grader`) and filtered from the SSE token stream to prevent internal tokens from leaking into the user-facing output. Grader failures default to CORRECT (fail-open), ensuring the pipeline never blocks on a grading error.
+
+### Polymorphic Block Data Layer
+
+Historical sessions store structured UI blocks (thinking traces, tool execution records, source citations, latency metrics) alongside conversation messages in the LangGraph checkpoint. Blocks are keyed by the AIMessage's unique ID using a dict-merge reducer, preventing index-mismatch from direct RAG turns, state healing, or retries.
+
+On history reload, the frontend reconstructs thinking panels, tool traces, source pills, and latency from these blocks — preserving full UI fidelity across page refreshes. Legacy conversations without blocks render as text-only with no breakage.
+
 ### Tool-Level Exception Handling
 
 LangGraph checkpoints state after each node transition. If a tool raises an unhandled exception, the checkpoint contains an `AIMessage` with `tool_calls` but no corresponding `ToolMessage` — leaving the graph in an irrecoverable `INVALID_CHAT_HISTORY` state that corrupts the session permanently.
@@ -100,7 +116,7 @@ See: [LangGraph INVALID_CHAT_HISTORY troubleshooting](https://langchain-ai.githu
 
 ### Backend State Healing on Disconnection
 
-When a user switches conversations or closes the browser mid-stream, the frontend’s `AbortController` severs the SSE connection. The backend catches this via `request.is_disconnected()` and `asyncio.CancelledError`. It isolates the interruption cleanly to prevent event loop blockages, then inspects the graph state for dangling `tool_calls`. If found, synthetic `ToolMessage` objects are injected via non-blocking `await graph.aupdate_state(config, {"messages": ...}, as_node="tools")` and `await graph.aget_state(config)` calls to safely restore valid state machine transitions.
+When a user switches conversations or closes the browser mid-stream, the frontend's `AbortController` severs the SSE connection. The backend catches this via `request.is_disconnected()` and `asyncio.CancelledError`. It isolates the interruption cleanly to prevent event loop blockages, then inspects the graph state for dangling `tool_calls`. If found, synthetic `ToolMessage` objects are injected via non-blocking `await graph.aupdate_state(config, {"messages": ...}, as_node="tools")` and `await graph.aget_state(config)` calls to safely restore valid state machine transitions.
 
 **Result:** Users can abort, switch, or refresh at any point during a stream without corrupting the conversation checkpoint. The session remains fully resumable.
 
@@ -108,8 +124,8 @@ When a user switches conversations or closes the browser mid-stream, the fronten
 
 Grimoire implements a strict separation between volatile runtime telemetry and immutable conversation history:
 
-- **Live sessions** stream real-time execution metadata via Server-Sent Events — agent reasoning traces, tool search queries, step latencies, reranker similarity scores, and chunk counts. This data exists only in the frontend’s React state during the active session.
-- **Historical sessions** are persisted as text via LangGraph’s SQLite checkpoint store. Intermediate vector coordinates, execution metrics, and reasoning traces are deliberately excluded post-stream to keep storage writes decoupled from analytical telemetry footprints.
+- **Live sessions** stream real-time execution metadata via Server-Sent Events — agent reasoning traces, tool search queries, step latencies, reranker similarity scores, and chunk counts. This data exists only in the frontend's React state during the active session.
+- **Historical sessions** are persisted as text via LangGraph's SQLite checkpoint store. Intermediate vector coordinates, execution metrics, and reasoning traces are deliberately excluded post-stream to keep storage writes decoupled from analytical telemetry footprints.
 
 This mirrors industry practice: ChatGPT and Claude both serialize historical conversations as text, reserving structured telemetry for live observability pipelines (LangSmith, Prometheus) rather than transactional user databases.
 
@@ -123,7 +139,7 @@ The embedding model (Voyage-code-3.5 at 1024 dimensions, or local all-MiniLM-L6-
 
 Lexical search uses BM25S loaded into application memory at startup. This provides a zero-dependency, self-contained hybrid retrieval pipeline that works without external tokenizer services.
 
-**Trade-off:** The BM25S vocabulary scales linearly with corpus size — **O(N)** memory at startup. For production-scale deployments managing large document collections, the migration path is routing sparse token weights natively into Qdrant’s [named sparse vectors](https://qdrant.tech/documentation/concepts/vectors/#named-vectors), shifting token indexing from application memory to the database engine for **O(1)** startup overhead and horizontal scalability via Qdrant cluster sharding with server-side Reciprocal Rank Fusion.
+**Trade-off:** The BM25S vocabulary scales linearly with corpus size — **O(N)** memory at startup. For production-scale deployments managing large document collections, the migration path is routing sparse token weights natively into Qdrant's [named sparse vectors](https://qdrant.tech/documentation/concepts/vectors/#named-vectors), shifting token indexing from application memory to the database engine for **O(1)** startup overhead and horizontal scalability via Qdrant cluster sharding with server-side Reciprocal Rank Fusion.
 
 ### Unified Checkpoint-Based Conversation Memory
 
@@ -169,8 +185,9 @@ grimoire/
 │   │   ├── config.py            # Pydantic settings with optional key handling
 │   │   ├── agent/
 │   │   │   ├── orchestrator.py  # LangGraph ReAct agent + SQLite checkpointer
-│   │   │   ├── tools.py         # rag_retrieval, web_search, database_query, code_executor
-│   │   │   └── prompts.py       # System prompt + RAG context template
+│   │   │   ├── state.py         # GrimoireState: AgentState + ui_history channel
+│   │   │   ├── tools.py         # rag_retrieval (CRAG), web_search, database_query, code_executor
+│   │   │   └── prompts.py       # System prompt + RAG context + CRAG grader prompt
 │   │   ├── rag/
 │   │   │   ├── retriever.py     # Hybrid pipeline: BM25S + dense + RRF + Cohere Rerank
 │   │   │   ├── embeddings.py    # Voyage-code-3.5 with local fallback
@@ -195,7 +212,7 @@ grimoire/
 
 ## Manual Setup (without Docker)
 
-For development or environments where Docker isn’t available.
+For development or environments where Docker isn't available.
 
 ### Requirements
 
@@ -348,21 +365,13 @@ Corrupted LangGraph checkpoints (from mid-request server crashes) are automatica
 ## Future Work
 
 **Agent Capabilities**
-
-- **Self-Corrective Retrieval** — CRAG-style retrieval grader that classifies results as relevant / ambiguous / incorrect and triggers query rewriting or web-search fallback on low confidence scores.
 - **Model Context Protocol (MCP)** — Expose Grimoire as a native MCP server so external developer tools (e.g., Claude Desktop, Cursor) can programmatically leverage its hybrid context index.
 
-**Data Architecture & Persistence**
-
-- **Polymorphic Block Data Layer** — Migrate the historical session rehydration tier from flat-text primitives to a strongly-typed, polymorphic structural schema (e.g., TextBlock, CodeExecutionBlock, UnifiedTraceBlock). This will allow rich interactive layout metadata and execution traces to natively survive page reloads without bloated database cross-joins.
-
 **Ingestion Scaling**
-
 - **URL Ingestion** — Scrape and extract content dynamically from online reference documentation.
 - **Batch Pipeline Ingestion** — Stream real-time file extraction progress for large multi-gigabyte repository ingestion.
 
 **Observability & UI Extension**
-
 - **LangSmith Core Tracing** — Deep trace inspection for granular step execution latency profiling across backend workers.
 - **Dynamic Context Chips** — Generate empty-state suggestion cues derived from the structural vocabulary density of ingested knowledge domains.
 - **Light Mode** — Complementary high-contrast workspace palette to mirror the primary monochromatic system layout.
