@@ -261,8 +261,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _tool_end_status(tool_name: str, output: str) -> dict:
         metrics: dict = {}
         if tool_name == "rag_retrieval":
-            chunk_count = sum(1 for line in output.splitlines() if line.strip().startswith("["))
             scores = re_module.findall(r'Similarity:\s*(\d+\.\d+)', output)
+            # Count chunks from the scores we already extracted — more reliable
+            # than counting lines starting with "[" which can break depending on
+            # how the output is serialized through astream_events
+            chunk_count = len(scores)
             if scores:
                 metrics["top_score"] = max(float(s) for s in scores)
                 metrics["chunks"] = chunk_count
@@ -352,9 +355,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         Core streaming logic. Yields SSE events: thinking, status, token, sources, done.
 
-        Monitors the client connection via request.is_disconnected(). If the
-        frontend AbortController fires mid-stream, we break out of the loop
-        and the caller heals any dangling checkpoint state.
+        Collects polymorphic UI blocks during the stream and commits them to
+        ui_history in the checkpoint at completion. These blocks allow the
+        frontend to reconstruct thinking panels, tool traces, source pills,
+        and metrics on history reload.
         """
         import json
 
@@ -362,6 +366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sources: set[str] = set()
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
+        tool_blocks: list[dict] = []     # Collected tool execution blocks
         phase = "pre_tool"
 
         async for event in graph.astream_events(
@@ -369,10 +374,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             config=config,
             version="v2",
         ):
-            # Check if client disconnected (AbortController fired)
             if await request.is_disconnected():
                 logger.info("Client disconnected mid-stream for session '%s'", session_id)
-                return  # Exit generator — caller will heal the checkpoint
+                return
 
             kind = event["event"]
             name = event.get("name", "")
@@ -383,6 +387,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 tool_name = name
                 query = _extract_tool_query(event)
                 status_msg = _tool_start_status(tool_name, query)
+                # Record tool start for block collection
+                tool_blocks.append({
+                    "type": "tool",
+                    "tool": tool_name,
+                    "query": query,
+                    "elapsed_ms": elapsed_ms,
+                })
                 yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': status_msg, 'elapsed_ms': elapsed_ms})}\n\n"
 
             elif kind == "on_tool_end":
@@ -392,6 +403,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if tool_name == "rag_retrieval":
                     _extract_sources_from_output(output, sources)
                 result = _tool_end_status(tool_name, output)
+                # Merge end data into the matching tool block
+                for tb in reversed(tool_blocks):
+                    if tb["tool"] == tool_name and "status" not in tb:
+                        tb["status"] = result["msg"]
+                        tb["elapsed_ms"] = elapsed_ms
+                        tb["metrics"] = result["metrics"]
+                        break
                 yield f"event: status\ndata: {json.dumps({'tool': tool_name, 'status': result['msg'], 'done': True, 'elapsed_ms': elapsed_ms, 'metrics': result['metrics']})}\n\n"
 
             elif kind == "on_chat_model_stream":
@@ -405,15 +423,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         answer_parts.append(text)
                         yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
 
-        # Stream completed normally — commit to checkpoint
+        # ── Stream completed — assemble blocks and commit ─────────────────
         latency_ms = round((time.monotonic() - start) * 1000, 2)
         full_answer = "".join(answer_parts)
 
         if not answer_parts and thinking_parts:
             full_answer = "".join(thinking_parts)
 
-        await asyncio.get_running_loop().run_in_executor(
-            None, agent.add_to_checkpoint, session_id, question, full_answer)
+        # Build the polymorphic block record for this turn
+        ui_blocks: list[dict] = []
+        if thinking_parts:
+            ui_blocks.append({"type": "thinking", "text": "".join(thinking_parts)})
+        ui_blocks.extend(tool_blocks)
+        ui_blocks.append({"type": "text", "text": full_answer})
+        for s in sorted(sources):
+            ui_blocks.append({"type": "source", "name": s})
+        ui_blocks.append({"type": "latency", "ms": latency_ms})
+
+        # Commit UI blocks keyed by the AIMessage's unique ID.
+        # NOTE: We do NOT call add_to_checkpoint here — the stream's internal
+        # checkpointing already committed the messages. Adding them again would
+        # create duplicates with different IDs, causing double messages on reload.
+        # We only write ui_history (the rich block metadata).
+        try:
+            state = await graph.aget_state(config)
+            msgs = state.values.get("messages", [])
+            # Find the last AIMessage with content — that's the one we just generated
+            msg_id = None
+            for msg in reversed(msgs):
+                if isinstance(msg, AIMessage) and getattr(msg, "content", None):
+                    msg_id = msg.id
+                    break
+            if msg_id:
+                await graph.aupdate_state(config, {"ui_history": {msg_id: ui_blocks}})
+            else:
+                logger.warning("No AIMessage ID found for ui_history commit | session=%s", session_id)
+        except Exception as exc:
+            logger.warning("Could not write ui_history for session '%s': %s", session_id, exc)
+
         yield f"event: sources\ndata: {json.dumps({'sources': sorted(sources)})}\n\n"
         yield f"event: done\ndata: {json.dumps({'latency_ms': latency_ms})}\n\n"
 

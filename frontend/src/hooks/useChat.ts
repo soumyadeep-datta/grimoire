@@ -306,12 +306,56 @@ export function useChat() {
     setMessages([])
     try {
       const history = await getHistory(sessionId)
-      const loadedMessages: Message[] = history.map((m: { role: string; content: string }) => ({
-        id: uuidv4(),
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content,
-        streaming: false,
-      }))
+      const loadedMessages: Message[] = history.map((m: { role: string; content: string; blocks?: any[] }) => {
+        const blocks = m.blocks ?? []
+        const hasBlocks = m.role === 'assistant' && blocks.length > 0
+
+        if (!hasBlocks) {
+          return {
+            id: uuidv4(),
+            role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: m.content,
+            streaming: false,
+          }
+        }
+
+        // Reconstruct rich state from polymorphic blocks
+        const thinking = blocks
+          .filter((b: any) => b.type === 'thinking')
+          .map((b: any) => b.text)
+          .join('')
+
+        const toolSteps: ToolStep[] = blocks
+          .filter((b: any) => b.type === 'tool')
+          .map((b: any, i: number) => ({
+            id: `loaded-step-${i}`,
+            tool: b.tool,
+            status: b.status ?? 'Done',
+            searchQuery: b.query ? `Searching: "${b.query}"` : undefined,
+            done: true,
+            order: i,
+            elapsedMs: b.elapsed_ms,
+            metrics: b.metrics,
+          }))
+
+        const sources = blocks
+          .filter((b: any) => b.type === 'source')
+          .map((b: any) => b.name)
+
+        const latencyMs = blocks.find((b: any) => b.type === 'latency')?.ms
+
+        return {
+          id: uuidv4(),
+          role: 'assistant' as const,
+          content: m.content,
+          thinking: thinking || undefined,
+          thinkingDone: true,
+          toolSteps: toolSteps.length > 0 ? toolSteps : undefined,
+          sources: sources.length > 0 ? sources : undefined,
+          latencyMs,
+          streaming: false,
+        }
+      })
       setMessages(loadedMessages)
     } catch {
       // If history fetch fails, stay with empty messages

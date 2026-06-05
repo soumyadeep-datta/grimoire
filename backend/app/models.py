@@ -84,8 +84,16 @@ class IngestResponse(BaseModel):
 # ── /history ─────────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel):
+    """A single conversation message with optional rich UI blocks.
+
+    The blocks field contains polymorphic content blocks (thinking traces,
+    tool execution records, source citations, latency metrics) that the
+    frontend uses to reconstruct the full UI on history reload. Legacy
+    conversations without blocks render as text-only.
+    """
     role: str  # "user" | "assistant"
     content: str
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HistoryResponse(BaseModel):
